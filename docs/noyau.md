@@ -17,49 +17,54 @@ L'ancien moteur le résout ainsi (à garder comme principe) :
 - les objets sont rangés en **zones de rendu** par niveau de zoom, et seuls ceux du niveau courant et de ses voisins sont dessinés ;
 - un trait tracé pendant un changement d'échelle est **découpé en bouts**, un par échelle (`DrawingSession` → `DrawingBout`).
 
-## Questions ouvertes (à trancher avant de coder)
+## Décisions (2026-10-18)
 
-Pour chacune : ma recommandation de départ, et pourquoi. Rien n'est figé : un prototype et des tests la confirmeront ou l'invalideront.
+Ce sont des hypothèses de départ : un prototype et des tests les confirmeront ou les invalideront (voir « Quand revenir sur une décision »).
 
-### 1. Rendu : Canvas 2D direct ou fabric ?
+### 1. Rendu : fabric.js, derrière une petite interface
 
-**Recommandation : Canvas 2D direct, sans fabric.** Dans l'ancien code, fabric ne sert que de rasterisseur, d'outil de sélection et de détection de clic, et il a fallu l'étendre ou le patcher dans 20 fichiers pour le plier au zoom infini. Pour des traits, un rendu direct est simple. La sélection et la détection de clic viendront plus tard, avec notre propre index spatial (les zones de rendu).
+On garde **fabric.js**, en version **7.4.0** (la dernière ; l'ancien code utilisait la 5.3.0, dont les patchs visaient des détails internes qu'on ne reprendra pas tels quels). Fabric calcule en flottants : le modèle exact reste de notre côté, et on lui donne des coordonnées **relatives à la caméra**.
 
-### 2. Quel type de grand nombre ?
+Le rendu passe par une **petite interface** (« dessine ces traits avec cette caméra »), pour qu'un rendu Canvas 2D direct reste possible plus tard si fabric devient un frein. Le choix de fabric vaut « pour l'instant ».
 
-Trois pistes :
+### 2. Grand nombre : rationnels dyadiques en `BigInt`
 
-- **A. Rationnels dyadiques (mantisse `BigInt`, exposant entier)** : une valeur vaut `n / 2^e`. Zoomer d'un facteur 2, c'est changer l'exposant : exact et sans coût. Pas de dépendance. Les flottants du rendu sont obtenus en soustrayant le centre de la caméra puis en convertissant la différence.
-- **B. `decimal.js`** (déjà utilisé avant) : arithmétique décimale à précision arbitraire. Plus familier, mais plus lent, et pas naturellement adapté aux puissances de 2.
-- **C. Hybride** : `decimal.js` pour la caméra, flottants locaux pour les points.
-
-**Recommandation : A**, à valider par un prototype. Le zoom par puissances de 2 et les pixels parfaits (grille à chaque niveau) sont des valeurs dyadiques, donc exactes en A. Repli : B.
+Une valeur vaut `n / 2^e`, avec `n` un `BigInt` natif et `e` un entier. Zoomer d'un facteur 2 revient à changer l'exposant : exact et sans coût. Pas de dépendance. Cela colle aux pixels parfaits (une grille à chaque niveau). Repli : `decimal.js` si le prototype échoue.
 
 Le facteur de zoom continu (molette) est stocké comme `zLevel` (entier) + un facteur flottant entre 1 et 2, jamais comme un seul `number` de 2^k.
 
-### 3. Comment stocker un trait qui traverse plusieurs niveaux de zoom ?
+### 3. Trait : découpé en bouts
 
-- **a. Chaque point est exact** (valeur dyadique complète). Simple, exact, mémoire raisonnable pour des traits de quelques centaines de points ; il faut recalculer les flottants relatifs à la caméra quand le niveau change (mis en cache par niveau, comme les zones de rendu).
-- **b. Le trait est découpé en bouts** comme avant : un ancrage par bout, des décalages flottants locaux. Plus compact, plus de cas particuliers.
+Comme dans l'ancien code, un trait qui traverse plusieurs niveaux de zoom est découpé en **bouts**, un par échelle :
 
-**Recommandation : a.** Un seul trait, un seul modèle, pas de découpage à gérer. Si les performances le demandent, on optimisera avec des mesures.
+- chaque bout a un **ancrage exact** (valeur dyadique) et des **points en flottants locaux**, exprimés dans les unités de son propre niveau ;
+- chaque bout devient un objet fabric dans son propre repère ; une transformation relative à la caméra le place à l'écran ;
+- le dernier point d'un bout est **le même point exact** que le premier du bout suivant (pas de trou à la jonction) ;
+- la jonction entre deux objets fabric ne doit pas se voir : extrémités arrondies, à vérifier visuellement.
 
-### 4. Quelle frontière entre moteur et applis ?
+### 4. Frontière entre moteur et applis
 
-Le moteur (`packages/engine`) offre : coordonnées et caméra, conversion écran ↔ monde, zones de rendu, entrées pointeur + molette, traits en points exacts. L'application décide de ce qu'on en fait : lissage en courbe de zveceditor (`zCurve3`, `ZIndexPencilBrush` dans l'ancien code) ou grille de pixels de zpixeleditor.
+Le moteur (`packages/engine`) offre : coordonnées et caméra, conversion écran ↔ monde, zones de rendu, entrées pointeur + molette, traits en bouts. L'application décide de ce qu'on en fait : lissage en courbe de zveceditor (`zCurve3`, `ZIndexPencilBrush` dans l'ancien code) ou grille de pixels de zpixeleditor.
 
 ### 5. Sauvegarde
 
 Pas dans ce tronçon, mais le modèle doit être **sérialisable en JSON dès le départ** (les grands nombres s'écrivent en chaînes). Le format `.shu` de l'ancien code n'a pas été audité ; on décidera plus tard si on le lit.
+
+## Quand revenir sur une décision
+
+- **Fabric 7** : si on doit le patcher en profondeur pour suivre le zoom, ou si la jonction entre bouts reste visible malgré les extrémités arrondies, on bascule sur le Canvas 2D direct (d'où l'interface de rendu).
+- **BigInt dyadique** : si les opérations par image sont trop lentes à quelques centaines de points, on mesure, on met en cache par niveau, puis seulement ensuite on envisage `decimal.js`.
+- **Bouts** : si le nombre de bouts explose (zoom très oscillant), on envisage de regrouper ou de re-découper.
 
 ## Critères de réussite du tronçon
 
 - `packages/engine` : tests Vitest qui passent. En particulier :
   - aller-retour écran ↔ monde à de grandes profondeurs (par exemple ±1000 niveaux de zoom) sans dérive ;
   - un trait tracé en changeant de zoom garde la même forme quand on le regarde à l'échelle de départ ;
+  - les bouts successifs partagent exactement leur point de jonction ;
   - un point tracé à un niveau profond ne se « téléporte » pas quand on dézoome.
 - `apps/zveceditor` : une page dans le navigateur où l'on trace en zoomant (molette pendant que le bouton est enfoncé), sans artefact visible, jusqu'à au moins 200 niveaux de profondeur.
-- Un document de mesure simple : nombre de points par trait et temps d'une image, pour savoir si l'option 3a tient.
+- Un document de mesure simple : nombre de points et de bouts par trait, et temps d'une image, pour savoir si les décisions 2 et 3 tiennent.
 
 ## Hors périmètre de ce tronçon
 

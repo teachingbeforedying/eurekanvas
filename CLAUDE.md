@@ -14,7 +14,10 @@ Un moteur de canevas infini (pas de limite en largeur, hauteur ni profondeur, on
 
 - **Approche** : noyau neuf + portage par morceaux. On ne refactore pas l'ancien monolithe : on réécrit le noyau (caméra à zoom infini, coordonnées, zones de rendu, dessin) avec des tests, puis on porte le contenu maths au besoin. Voir `docs/audit-ancien-moteur.md`.
 - **Langage et outillage** : TypeScript, Vite, Vitest, workspaces npm (`packages/*`, `apps/*`).
-- **Premier tronçon** : le zoom pendant le tracé (cœur de zveceditor). Conception et questions ouvertes dans `docs/noyau.md` : ne pas coder le noyau avant que Sébastien ait tranché ces questions.
+- **Premier tronçon** : le zoom pendant le tracé (cœur de zveceditor). Conception et décisions dans `docs/noyau.md` :
+  - rendu avec **fabric.js 7.4.0**, derrière une petite interface de rendu (un Canvas 2D direct reste possible plus tard) ;
+  - positions et zoom en **rationnels dyadiques `BigInt`** (`n / 2^e`), repli sur decimal.js si le prototype échoue ;
+  - un trait qui traverse plusieurs niveaux de zoom est **découpé en bouts** (ancrage exact + points en flottants locaux).
 
 ## Commandes
 
