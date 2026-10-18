@@ -10,7 +10,15 @@ Un moteur de canevas infini (pas de limite en largeur, hauteur ni profondeur, on
 - `apps/zveceditor/` : un éditeur vectoriel « 2,5D » : on peut changer le niveau de zoom pendant le tracé d'une courbe à main levée.
 - `docs/ideas/` : les idées du projet, classées.
 
-L'outillage (langage, bundler, workspaces) n'est pas encore choisi.
+## Décisions (2026-10-18)
+
+- **Approche** : noyau neuf + portage par morceaux. On ne refactore pas l'ancien monolithe : on réécrit le noyau (caméra à zoom infini, coordonnées, zones de rendu, dessin) avec des tests, puis on porte le contenu maths au besoin. Voir `docs/audit-ancien-moteur.md`.
+- **Langage et outillage** : TypeScript, Vite, Vitest, workspaces npm (`packages/*`, `apps/*`).
+- **Premier tronçon** : le zoom pendant le tracé (cœur de zveceditor). Conception et questions ouvertes dans `docs/noyau.md` : ne pas coder le noyau avant que Sébastien ait tranché ces questions.
+
+## Commandes
+
+Depuis la racine : `npm install`, `npm test` (Vitest, tous les workspaces), `npm run build`.
 
 ## Workflow git
 
@@ -27,6 +35,7 @@ L'outillage (langage, bundler, workspaces) n'est pas encore choisi.
 - `C:\DEV\__SHUCLAUDE\zpsite` : ancien serveur express de zpixeleditor.com (sert `3DRoom+ic.html` en injectant une sauvegarde `.shu`).
 - `C:\DEV\__SHUCLAUDE\iC__recherche` : recherches autour du canevas infini.
 - Les idées : `still_shute.txt`, `programmashute.txt`, `_book/still_book.md` dans `a-user-interface`.
+- Repères de lignes (zoom, dessin, maths, défis, slots) dans `3DRoom+ic.html` : tableau « Repères pour le portage » de `docs/audit-ancien-moteur.md`.
 
 ## Hébergement
 
