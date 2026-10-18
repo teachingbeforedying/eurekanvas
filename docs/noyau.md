@@ -50,11 +50,51 @@ Le moteur (`packages/engine`) offre : coordonnées et caméra, conversion écran
 
 Pas dans ce tronçon, mais le modèle doit être **sérialisable en JSON dès le départ** (les grands nombres s'écrivent en chaînes). Le format `.shu` de l'ancien code n'a pas été audité ; on décidera plus tard si on le lit.
 
+## Conventions (code dans `packages/engine/src`)
+
+- Une position du monde est un `Dyadic` exact (`n / 2^e`, forme canonique : `n` impair). L'écran est en pixels, origine en haut à gauche.
+- L'axe **y est vers le bas**, dans le monde comme à l'écran : rien à inverser.
+- L'échelle (pixels écran par unité monde) vaut `2^zLevel × factor`, avec `factor` dans [1, 2). **`zLevel` augmente quand on zoome en avant.** Le sens du `zLevel` de l'ancien code n'est pas établi avec certitude : à vérifier quand on portera les pixels parfaits de zpixeleditor.
+- La caméra est une valeur immuable `{ center, zLevel, factor }` : `center` est le point du monde affiché au milieu du viewport. Les fonctions (`screenToWorld`, `worldToScreen`, `pan`, `zoomAt`) renvoient de nouvelles valeurs.
+- Seuls de petits décalages en pixels passent par un `number` ; ils sont convertis **exactement** en dyadiques.
+- `-0` devient `0` dans la conversion, et `NaN`/`Infinity` sont refusés.
+
 ## Quand revenir sur une décision
 
 - **Fabric 7** : si on doit le patcher en profondeur pour suivre le zoom, ou si la jonction entre bouts reste visible malgré les extrémités arrondies, on bascule sur le Canvas 2D direct (d'où l'interface de rendu).
-- **BigInt dyadique** : si les opérations par image sont trop lentes à quelques centaines de points, on mesure, on met en cache par niveau, puis seulement ensuite on envisage `decimal.js`.
+- **BigInt dyadique** : si les opérations par image sont trop lentes à quelques centaines de points, on mesure, on met en cache par niveau, puis seulement ensuite on envisage `decimal.js`. Deux autres signaux : un besoin réel de division ou de racine exactes sur les positions du monde, ou une mesure dans un navigateur (avec fabric et des traits réalistes) qui dépasse le budget d'une image. Le retour reste abordable, car la caméra n'utilise qu'une petite interface (`add`, `sub`, `mul`, `shift`, `compare`, `fromNumber`, `toNumber`). Choix confirmé le 2026-10-18 après les premières mesures ; `decimal.js` n'a pas été mesuré, la comparaison reste possible.
 - **Bouts** : si le nombre de bouts explose (zoom très oscillant), on envisage de regrouper ou de re-découper.
+
+## Premiers résultats : nombres dyadiques et caméra (2026-10-18)
+
+Construit : `dyadic.ts` (nombres exacts), `camera.ts` (caméra), 44 tests Vitest (21 sur les dyadiques, 20 sur la caméra, 3 sur les prémisses), build TypeScript strict sans erreur. Pas de fabric, pas de trait, pas d'interface.
+
+**Ce que les tests montrent.**
+- Les aller-retours écran → monde → écran sont justes à moins de 1e-9 pixel de −1000 à +1000 niveaux de zoom, avec des centres de 1 000 bits.
+- `zoomAt` garde **exactement** le point sous le curseur (égalité des dyadiques, pas une tolérance) après 5 000 zooms avant (environ 2^687) puis 5 000 zooms arrière.
+- Les ratios extrêmes (1e300, 1e-300) ne débordent pas, car le ratio est découpé en puissance de 2 et partie dans [1, 2).
+- Vérifié par une mutation volontaire : en cassant le calcul du nouveau centre dans `zoomAt`, trois tests échouent. Les tests détectent donc bien une erreur d'ancrage.
+
+**Vitesse** (Node 24, une seule machine, quelques dizaines de passes après échauffement ; script jetable, non conservé). Hypothèse « BigInt dyadique » : tenable pour ce tronçon, sans cache par niveau.
+
+| Opération | zLevel −1000 | zLevel 0 | zLevel +1000 |
+| --------- | ------------ | -------- | ------------ |
+| `worldToScreen`, 1 000 points | 3,2 ms | 3,0 ms | 1,7 ms |
+| `screenToWorld`, 1 000 points | 1,0 ms | 1,1 ms | 1,1 ms |
+
+Soit 2 à 3 µs par point avec un centre de 1 000 bits. `zoomAt` : 6,5 µs par appel (5 000 zooms consécutifs en 32 ms). Ce n'est pas mesuré dans un navigateur, ni avec fabric.
+
+**Taille d'un centre.** Elle dépend de l'**étendue** de la position (du chiffre binaire le plus gros au plus fin), pas de la profondeur atteinte :
+- zoomer vers un point *hors du centre de l'écran* l'allonge d'environ un bit par niveau : 191, 327, 464, 603 puis 738 bits après 1 000 à 5 000 zooms (de `zLevel` 137 à 687), soit environ `zLevel + 54` bits ;
+- dézoomer autour du même point la raccourcit (10 bits de retour au niveau 0) ;
+- zoomer autour du milieu de l'écran ne change pas le centre (0 bit), et un déplacement à 500 niveaux de profondeur n'y ajoute que 52 bits, quelle que soit la profondeur ;
+- 738 bits, c'est une centaine d'octets : sans conséquence à ce stade. Si besoin, on pourra arrondir le centre à quelques dizaines de bits sous la taille d'un pixel.
+
+(Cette section corrige une hypothèse du plan de travail, qui supposait une taille croissant avec la profondeur et ne rétrécissant jamais.)
+
+**Limite de précision de l'écran.** Une coordonnée écran est un `number` : près de 400, son pas est d'environ 6e-14 pixel. Un point à moins de cet écart du milieu est donc affiché *au* milieu, même si son décalage exact est connu. C'est sans conséquence pour l'affichage, mais ça compte pour les tests : un premier test de dézoom comparait des distances à l'écran et échouait (1,7e-9 d'écart relatif) parce qu'il mesurait cet arrondi et non la caméra. Il ne compare maintenant les distances que lorsqu'elles sont mesurables.
+
+**Pas encore vérifié** : le comportement avec fabric 7, dans un navigateur, avec des traits en bouts, et la lecture du `zLevel` de l'ancien code.
 
 ## Critères de réussite du tronçon
 

@@ -1,2 +1,35 @@
-// The engine's public API will be exported from here.
-export {};
+// The engine's public API.
+export {
+  type Dyadic,
+  ONE,
+  ZERO,
+  add,
+  compare,
+  dyadic,
+  dyadicFromString,
+  dyadicToString,
+  equals,
+  fromNumber,
+  mul,
+  neg,
+  shift,
+  sign,
+  significantBits,
+  sub,
+  toNumber,
+} from "./dyadic";
+export {
+  type Camera,
+  type CameraOptions,
+  type Point,
+  type ScreenPoint,
+  type Viewport,
+  ORIGIN,
+  createCamera,
+  log2Scale,
+  pan,
+  scale,
+  screenToWorld,
+  worldToScreen,
+  zoomAt,
+} from "./camera";
