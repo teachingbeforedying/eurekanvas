@@ -19,21 +19,33 @@ export {
   toNumber,
 } from "./dyadic";
 export {
-  type Bout,
-  type BoutProjection,
+  type Section,
+  type SectionProjection,
   type LocalPoint,
   type Stroke,
   type StrokeJSON,
   STROKE_FORMAT,
   STROKE_FORMAT_VERSION,
   StrokeRecorder,
+  convertWidth,
   localToScreen,
   pointWorld,
-  projectBout,
+  projectSection,
   strokeFromJSON,
   strokeToJSON,
   strokeWorldPoints,
 } from "./stroke";
+export { type OutlinePoint, type PathCommand, strokeOutline } from "./outline";
+export {
+  type DrawableSection,
+  type Renderer,
+  type Scene,
+  type SelectionOptions,
+  DEFAULT_MAX_LEVEL_GAP,
+  DEFAULT_MAX_REACH_PIXELS,
+  DEFAULT_MIN_PIXELS,
+  selectDrawableSections,
+} from "./render";
 export {
   type Camera,
   type CameraOptions,

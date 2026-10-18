@@ -4,7 +4,8 @@
 
 Un moteur de canevas infini (pas de limite en largeur, hauteur ni profondeur, on peut zoomer pendant qu'on dessine), et les applis construites dessus :
 
-- `packages/engine/` : le moteur.
+- `packages/engine/` : le moteur (nombres exacts, caméra, traits en sections, choix de ce qu'on dessine, format JSON). Pur : testable sous Node, ne connaît aucune bibliothèque de dessin.
+- `packages/renderer-fabric/` : le rendu avec fabric.js 7 (implémente l'interface `Renderer` du moteur).
 - `apps/mathgame/` : des activités maths par manipulation d'objets, comme des niveaux d'un jeu de logique (façon sokoban). L'élève se trompe beaucoup, puis comprend, et progresse en s'amusant. En ligne sur https://mathgame.fr.
 - `apps/zpixeleditor/` : un éditeur pixel (un bon vieux paint) avec des pixels parfaits à n'importe quel niveau de zoom. Pour https://zpixeleditor.com.
 - `apps/zveceditor/` : un éditeur vectoriel « 2,5D » : on peut changer le niveau de zoom pendant le tracé d'une courbe à main levée.
@@ -17,17 +18,20 @@ Un moteur de canevas infini (pas de limite en largeur, hauteur ni profondeur, on
 - **Premier tronçon** : le zoom pendant le tracé (cœur de zveceditor). Conception et décisions dans `docs/noyau.md` :
   - rendu avec **fabric.js 7.4.0**, derrière une petite interface de rendu (un Canvas 2D direct reste possible plus tard) ;
   - positions et zoom en **rationnels dyadiques `BigInt`** (`n / 2^e`), repli sur decimal.js si le prototype échoue ;
-  - un trait qui traverse plusieurs niveaux de zoom est **découpé en bouts** (ancrage exact + points en flottants locaux).
+  - un trait qui traverse plusieurs niveaux de zoom est **découpé en sections**, une par niveau entier (ancrage exact + points en flottants locaux) ;
+  - chaque point porte son **épaisseur**, choisie pour être constante à l'écran au moment du tracé, et le trait est dessiné en capsules effilées : dégradé continu, pas de coupure par cran de molette (contrairement à l'ancien code).
+- **Stylo de zveceditor** : lisse par défaut (une « corde » de 16 px d'écran, `apps/zveceditor/src/rope.ts`), brut avec `S`, réglable avec `[` et `]`. Le bouton droit ou du milieu déplace la vue même pendant un tracé, bouton gauche enfoncé. Les boutons se lisent dans le masque `event.buttons` (un second bouton ne produit pas de `pointerdown`).
+- **Limite connue** : le canvas d'un navigateur calcule en simple précision, donc une section qui s'étend à plus de ~4 millions de pixels de son point de pose n'est pas dessinée. Les traits lointains en niveaux disparaissent plus tôt que dans l'ancienne version (14 niveaux au lieu de 24 pour une section de 100 unités locales). Voir `docs/noyau.md` pour la mesure et la suite possible.
 
 ## Commandes
 
-Depuis la racine : `npm install`, `npm test` (Vitest, tous les workspaces), `npm run build`.
+Depuis la racine : `npm install`, `npm test` (Vitest, tous les workspaces), `npm run build`, et `npm run dev --workspace @eurekanvas/zveceditor` pour lancer la page jouable (http://localhost:5173).
 
 ## Workflow git
 
 - **Ne jamais commit ni pousser sans demande explicite** (« commit », « pousse », « commit et pousse »). Avant un commit, montrer les fichiers concernés et le message.
 - Messages de commit en français, courts, à l'impératif (« Ajoute le zoom molette »).
-- Code et identifiants en anglais.
+- **Code en anglais pur** : identifiants, commentaires, noms de tests, clés JSON et noms de fichiers de code, sans mots français ni franglais, pour que des gens qui récupèrent le code ne soient pas surpris. Les notes de travail dans `docs/` restent en français, sauf les spécifications destinées à des lecteurs tiers (`docs/stroke-format.md`, en anglais). Une partie d'un trait dessinée à un niveau de zoom s'appelle `Section` (pas « bout » : Sébastien employait ce mot au sens anglais de *round*, comme dans `DrawingBout` de l'ancien code).
 - On travaille sur `main`. Pour un gros chantier : une branche et une PR, si Sébastien veut relire avant de fusionner.
 - L'email de commit est réglé localement dans ce repo (`sebastien_hugot@protonmail.com`). Ne pas modifier la config git globale.
 

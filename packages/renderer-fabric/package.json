@@ -1,0 +1,17 @@
+{
+  "name": "@eurekanvas/renderer-fabric",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Draws eurekanvas strokes with fabric.js",
+  "license": "MIT",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@eurekanvas/engine": "*",
+    "fabric": "7.4.0"
+  }
+}

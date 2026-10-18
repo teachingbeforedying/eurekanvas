@@ -15,7 +15,7 @@ L'ancien moteur le résout ainsi (à garder comme principe) :
 - le **niveau de zoom est un entier** (`zLevel`, en puissances de 2) auquel s'ajoute un facteur continu de faible amplitude ;
 - les positions précises sont exprimées dans une représentation à précision arbitraire, et le rendu ne manipule que des flottants **relatifs à la caméra** (petits, donc exacts) ;
 - les objets sont rangés en **zones de rendu** par niveau de zoom, et seuls ceux du niveau courant et de ses voisins sont dessinés ;
-- un trait tracé pendant un changement d'échelle est **découpé en bouts**, un par échelle (`DrawingSession` → `DrawingBout`).
+- un trait tracé pendant un changement d'échelle est **découpé en sections**, une par échelle (`DrawingSession` → `DrawingBout` dans l'ancien code).
 
 ## Décisions (2026-10-18)
 
@@ -33,19 +33,30 @@ Une valeur vaut `n / 2^e`, avec `n` un `BigInt` natif et `e` un entier. Zoomer d
 
 Le facteur de zoom continu (molette) est stocké comme `zLevel` (entier) + un facteur flottant entre 1 et 2, jamais comme un seul `number` de 2^k.
 
-### 3. Trait : découpé en bouts
+### 3. Trait : découpé en sections
 
-Comme dans l'ancien code, un trait qui traverse plusieurs niveaux de zoom est découpé en **bouts**, un par échelle :
+Comme dans l'ancien code, un trait qui traverse plusieurs niveaux de zoom est découpé en **sections**, une par échelle :
 
-- chaque bout a un **ancrage exact** (valeur dyadique), un `zLevel` entier et des **points en flottants locaux** : un point local vaut `(position − ancrage) × 2^zLevel`, et sa position exacte est **définie** comme `ancrage + local × 2^-zLevel` ;
-- un nouveau bout commence dès que le `zLevel` de la caméra change ; le facteur continu de la molette à l'intérieur d'un niveau n'a aucun effet, les unités locales n'en dépendent pas ;
-- chaque bout devient un objet fabric dans son propre repère ; une transformation relative à la caméra le place à l'écran ;
-- le dernier point d'un bout est **le même point exact** que le premier du bout suivant (pas de trou à la jonction) ;
-- la jonction entre deux objets fabric ne doit pas se voir : extrémités arrondies, à vérifier visuellement.
+- chaque section a un **ancrage exact** (valeur dyadique), un `zLevel` entier et des **points en flottants locaux** : un point local vaut `(position − ancrage) × 2^zLevel`, et sa position exacte est **définie** comme `ancrage + local × 2^-zLevel` ;
+- une nouvelle section commence dès que le `zLevel` de la caméra change ; le facteur continu de la molette à l'intérieur d'un niveau n'a aucun effet, les unités locales n'en dépendent pas ;
+- chaque point porte aussi son **épaisseur** (`width`, en unités locales), choisie au moment du tracé pour que le trait fasse un nombre constant de pixels à l'écran à cet instant (`pixels / facteur de la caméra`) ; voir « Épaisseur : un dégradé continu » ;
+- chaque section devient un objet fabric (un `Path`) dans son propre repère ; une transformation relative à la caméra le place à l'écran ;
+- le dernier point d'une section est **le même point exact** que le premier de la section suivante, avec la même épaisseur exprimée dans la nouvelle unité (pas de trou ni de marche à la jonction) ;
+- la jonction entre deux objets fabric ne se voit pas : extrémités arrondies (vérifié dans le navigateur).
+
+### Épaisseur : un dégradé continu
+
+L'ancien code coupait le trait **à chaque cran de molette** pendant le tracé (`isBreakingBout = true`, L33762) pour recalculer l'épaisseur : l'épaisseur y est constante par morceau, avec des sauts entre morceaux. Sébastien a demandé mieux : un dégradé qui ne laisse pas voir les crans.
+
+- Une largeur par point, et **aucune coupure par cran de molette** : on ne coupe qu'au changement de niveau entier.
+- Deux points consécutifs sont reliés par l'**enveloppe convexe de deux disques** de diamètres `width` (`strokeOutline`, dans `packages/engine/src/outline.ts`) : une capsule effilée. Un point seul est un disque. Le trait est l'union de ces formes : extrémités et jonctions rondes, épaisseur qui varie linéairement entre deux points.
+- Effet : un cran de molette entre deux positions du pointeur donne un affinement progressif sur le segment suivant. Vu de loin, le trait s'affine doucement quand on plonge.
+- Écartés : des segments à largeur moyenne et extrémités rondes (marches visibles) ; un sous-échantillonnage des segments (approximatif et coûteux).
+- **Non inclus** : animer le zoom sur ~100 ms au lieu de le faire d'un coup. Cela changerait le ressenti par rapport à l'ancienne version ; à décider après essai.
 
 ### 4. Frontière entre moteur et applis
 
-Le moteur (`packages/engine`) offre : coordonnées et caméra, conversion écran ↔ monde, zones de rendu, entrées pointeur + molette, traits en bouts. L'application décide de ce qu'on en fait : lissage en courbe de zveceditor (`zCurve3`, `ZIndexPencilBrush` dans l'ancien code) ou grille de pixels de zpixeleditor.
+Le moteur (`packages/engine`) offre : coordonnées et caméra, conversion écran ↔ monde, zones de rendu, entrées pointeur + molette, traits en sections. L'application décide de ce qu'on en fait : lissage en courbe de zveceditor (`zCurve3`, `ZIndexPencilBrush` dans l'ancien code) ou grille de pixels de zpixeleditor.
 
 ### 5. Sauvegarde
 
@@ -62,9 +73,9 @@ Pas dans ce tronçon, mais le modèle doit être **sérialisable en JSON dès le
 
 ## Quand revenir sur une décision
 
-- **Fabric 7** : si on doit le patcher en profondeur pour suivre le zoom, ou si la jonction entre bouts reste visible malgré les extrémités arrondies, on bascule sur le Canvas 2D direct (d'où l'interface de rendu).
+- **Fabric 7** : si on doit le patcher en profondeur pour suivre le zoom, ou si la jonction entre sections reste visible malgré les extrémités arrondies, on bascule sur le Canvas 2D direct (d'où l'interface de rendu).
 - **BigInt dyadique** : si les opérations par image sont trop lentes à quelques centaines de points, on mesure, on met en cache par niveau, puis seulement ensuite on envisage `decimal.js`. Deux autres signaux : un besoin réel de division ou de racine exactes sur les positions du monde, ou une mesure dans un navigateur (avec fabric et des traits réalistes) qui dépasse le budget d'une image. Le retour reste abordable, car la caméra n'utilise qu'une petite interface (`add`, `sub`, `mul`, `shift`, `compare`, `fromNumber`, `toNumber`). Choix confirmé le 2026-10-18 après les premières mesures ; `decimal.js` n'a pas été mesuré, la comparaison reste possible.
-- **Bouts** : si le nombre de bouts explose (zoom très oscillant), on envisage de regrouper ou de re-découper.
+- **Sections** : si le nombre de sections explose (zoom très oscillant), on envisage de regrouper ou de re-découper.
 
 ## Premiers résultats : nombres dyadiques et caméra (2026-10-18)
 
@@ -95,29 +106,29 @@ Soit 2 à 3 µs par point avec un centre de 1 000 bits. `zoomAt` : 6,5 µs par a
 
 **Limite de précision de l'écran.** Une coordonnée écran est un `number` : près de 400, son pas est d'environ 6e-14 pixel. Un point à moins de cet écart du milieu est donc affiché *au* milieu, même si son décalage exact est connu. C'est sans conséquence pour l'affichage, mais ça compte pour les tests : un premier test de dézoom comparait des distances à l'écran et échouait (1,7e-9 d'écart relatif) parce qu'il mesurait cet arrondi et non la caméra. Il ne compare maintenant les distances que lorsqu'elles sont mesurables.
 
-**Pas encore vérifié** : le comportement avec fabric 7, dans un navigateur, avec des traits en bouts, et la lecture du `zLevel` de l'ancien code.
+**Pas encore vérifié** : le comportement avec fabric 7, dans un navigateur, avec des traits en sections, et la lecture du `zLevel` de l'ancien code.
 
 ## Sérialisation et export
 
 La question posée : ces traits « un peu particuliers » peuvent-ils être sauvegardés et lus ailleurs, ou seul notre logiciel peut-il les afficher ? Trois niveaux.
 
-1. **Format natif, sans perte** : JSON versionné `eurekanvas/stroke`, spécifié dans [format-trait.md](./format-trait.md). Ancrages exacts écrits en texte (`"3/2^-4"`), points en nombres. Tout langage qui sait lire de grands entiers peut le lire, donc des lecteurs tiers sont possibles. En pratique, notre moteur sera le seul à afficher un trait **en entier à toute profondeur**.
-2. **Exports vers les formats courants, avec perte assumée** (pas encore faits) : instantané d'une vue en SVG, PNG ou PDF, en projetant les bouts visibles ; vidéo ou GIF du zoom, qui raconte la plongée telle qu'elle a été dessinée ; pour du raster, une pyramide de tuiles bornée en profondeur. À ma connaissance (non vérifié), les formats courants reposent sur des flottants 32 ou 64 bits : un trait de 700 niveaux n'y tient pas en un seul repère, d'où la perte. Un instantané ne contient que ce qui est visible à l'échelle de la vue (ce qui est bien plus petit qu'un pixel, ou hors de l'écran, disparaît) ; la fourchette de niveaux utile dépend de la précision de l'application qui ouvrira le fichier, et n'a pas été mesurée.
+1. **Format natif, sans perte** : JSON versionné `eurekanvas/stroke`, spécifié dans [stroke-format.md](./stroke-format.md). Ancrages exacts écrits en texte (`"3/2^-4"`), points en nombres. Tout langage qui sait lire de grands entiers peut le lire, donc des lecteurs tiers sont possibles. En pratique, notre moteur sera le seul à afficher un trait **en entier à toute profondeur**.
+2. **Exports vers les formats courants, avec perte assumée** (pas encore faits) : instantané d'une vue en SVG, PNG ou PDF, en projetant les sections visibles ; vidéo ou GIF du zoom, qui raconte la plongée telle qu'elle a été dessinée ; pour du raster, une pyramide de tuiles bornée en profondeur. À ma connaissance (non vérifié), les formats courants reposent sur des flottants 32 ou 64 bits : un trait de 700 niveaux n'y tient pas en un seul repère, d'où la perte. Un instantané ne contient que ce qui est visible à l'échelle de la vue (ce qui est bien plus petit qu'un pixel, ou hors de l'écran, disparaît) ; la fourchette de niveaux utile dépend de la précision de l'application qui ouvrira le fichier, et n'a pas été mesurée.
 3. **Visionneur web** : le moteur est du JavaScript, donc un lien vers le site suffit pour que quelqu'un voie le trait en entier.
 
 Un export exige un style de trait (couleur, épaisseur), absent du modèle pour l'instant : il viendra avec le rendu.
 
-## Résultats : traits découpés en bouts (2026-10-18)
+## Résultats : traits découpés en sections (2026-10-18)
 
 Construit : `stroke.ts` (modèle, enregistreur, projection, JSON), 24 tests ; 68 tests au total, build TypeScript strict sans erreur. Toujours sans fabric.
 
 **Ce que les tests montrent.**
 - Un trait tracé en zoomant (pointeur sur un cercle, puis pointeur qui erre) à travers 211 niveaux garde sa forme : l'écart entre le point sous le pointeur et le point enregistré reste sous 1e-9 unité locale.
-- Il y a exactement un bout par niveau traversé, en zoom avant comme en zoom arrière.
+- Il y a exactement une section par niveau traversé, en zoom avant comme en zoom arrière.
 - Les jonctions sont exactement partagées (égalité des dyadiques).
-- Les coordonnées locales restent petites à n'importe quelle profondeur, ce qui est le but des bouts. Plus grande valeur mesurée sur 3 000 événements et 211 niveaux : 112 pour un pointeur qui tourne en cercle, 1 255 dans le pire cas (le pointeur saute à travers tout l'écran à chaque événement). Les tests exigent moins de 5 000.
-- Un va-et-vient du zoom autour d'une frontière de niveau crée un bout par événement. C'est le pire cas de la règle simple « un bout par niveau » ; il reste exact. Une hystérésis pourra l'atténuer si fabric montre un problème.
-- Contrôle par mutation : en ancrant le nouveau bout sur le mauvais point, 10 tests échouent ; en inversant le signe du niveau dans `pointWorld`, 9 échouent (chaque modification a été défaite ensuite).
+- Les coordonnées locales restent petites à n'importe quelle profondeur, ce qui est le but des sections. Plus grande valeur mesurée sur 3 000 événements et 211 niveaux : 112 pour un pointeur qui tourne en cercle, 1 255 dans le pire cas (le pointeur saute à travers tout l'écran à chaque événement). Les tests exigent moins de 5 000.
+- Un va-et-vient du zoom autour d'une frontière de niveau crée une section par événement. C'est le pire cas de la règle simple « une section par niveau » ; il reste exact. Une hystérésis pourra l'atténuer si fabric montre un problème.
+- Contrôle par mutation : en ancrant la nouvelle section sur le mauvais point, 10 tests échouent ; en inversant le signe du niveau dans `pointWorld`, 9 échouent (chaque modification a été défaite ensuite).
 
 **Vitesse** (Node 24, une machine, script jetable non conservé ; trait de 10 000 points, 1 375 niveaux de profondeur) :
 
@@ -126,19 +137,21 @@ Construit : `stroke.ts` (modèle, enregistreur, projection, JSON), 24 tests ; 68
 | `addPoint` | 1,8 µs par point |
 | `strokeWorldPoints`, 10 000 points | 13 ms |
 | `strokeToJSON` + `JSON.stringify` | 7,6 ms |
-| `projectBout`, 212 bouts (une image) | 0,37 ms (1,8 µs par bout) |
+| `projectSection`, 212 sections (une image) | 0,37 ms (1,8 µs par section) |
 
-**Taille du JSON** pour ce trait (1 376 bouts, 11 375 points) : 1 082 Kio, dont 638 Kio pour les ancrages (59 %) ; 403 Kio avec gzip. Les ancrages sont redondants (celui d'un bout est le dernier point du précédent) : une version future pourrait les omettre et diviser la taille par deux environ. La version 1 les garde pour que chaque bout soit lisible seul.
+**Taille du JSON** pour ce trait (1 376 sections, 11 375 points) : 1 082 Kio, dont 638 Kio pour les ancrages (59 %) ; 403 Kio avec gzip. Les ancrages sont redondants (celui d'une section est le dernier point de la précédente) : une version future pourrait les omettre et diviser la taille par deux environ. La version 1 les garde pour que chaque section soit lisible seule.
 
-**Erreur de la projection en flottants** (`origin + local × scale`) selon l'écart de niveaux entre la caméra et le bout, pire cas sur 30 positions à l'écran, en pixels :
+**Erreur de la projection en flottants** (`origin + local × scale`) selon l'écart de niveaux entre la caméra et la section, pire cas sur 30 positions à l'écran, en pixels :
 
-| Étendue du bout | écart 0 | 10 | 20 | 30 | 40 | 50 |
+| Étendue de la section | écart 0 | 10 | 20 | 30 | 40 | 50 |
 | --------------- | ------- | -- | -- | -- | -- | -- |
 | 10 unités locales | 0 | 2e-12 | 2e-9 | 2e-6 | 2e-3 | 1,9 |
 | 100 unités locales | 6e-14 | 1,5e-11 | 2,5e-8 | 2,8e-5 | 1,6e-2 | 20 |
 | 1 000 unités locales | 2e-13 | 2e-10 | 2e-7 | 2e-4 | 0,24 | 350 |
 
-L'erreur est multipliée par environ 1 000 tous les 10 niveaux. **Règle proposée** : projeter un bout par la voie rapide (`projectBout`) quand l'écart de niveaux est d'au plus 30 (erreur sous 3e-4 px pour des bouts de moins de 1 000 unités locales), et au-delà projeter chaque point par la voie exacte (`pointWorld` puis `worldToScreen`, environ 3 µs par point). Le seuil sera fixé avec les zones de rendu.
+L'erreur est multipliée par environ 1 000 tous les 10 niveaux. **Règle proposée** : projeter une section par la voie rapide (`projectSection`) quand l'écart de niveaux est d'au plus 30 (erreur sous 3e-4 px pour des sections de moins de 1 000 unités locales), et au-delà projeter chaque point par la voie exacte (`pointWorld` puis `worldToScreen`, environ 3 µs par point). Le seuil sera fixé avec les zones de rendu.
+
+**Cette règle est remplacée par la mesure dans le navigateur** (section « Résultats : page jouable » plus bas) : le canvas d'un navigateur calcule en simple précision et se dégrade bien avant les nombres JavaScript.
 
 **Leçons de la mise au point, pour mémoire.**
 - Une première mesure de cette erreur donnait 0 partout : le point était pile au milieu d'un écran de taille paire, donc aligné sur la grille des flottants, et l'arrondi se compensait. La mesure ci-dessus utilise un écran de taille impaire et 30 positions quelconques.
@@ -147,19 +160,77 @@ L'erreur est multipliée par environ 1 000 tous les 10 niveaux. **Règle propos�
 
 **Pas encore vérifié** : fabric, un navigateur, un vrai pointeur, la sensation de dessin « comme dans l'ancienne version ».
 
-## Suite : de quoi tester à la main
+## Résultats : page jouable et rendu fabric (2026-10-18)
 
-Rien de ce qui précède ne se teste encore avec la souris. L'objectif de Sébastien est un moteur qui se comporte **comme l'ancien** quand on trace en zoomant, et il jugera sur pièce. L'étape suivante est donc une page jouable dans `apps/zveceditor` : tracer avec la souris, zoomer à la molette autour du pointeur y compris pendant le tracé, afficher le trait par fabric 7. Gestes de l'ancienne version à reprendre ou à adapter (README de `a-user-interface`) : tracer en gardant la touche `²` (ou `` ` ``) enfoncée et en cliquant ; molette pour zoomer, avec « l'index fait défiler la molette pendant que le majeur clique » pour tracer et zoomer en même temps.
+L'objectif de Sébastien est un moteur qui se comporte **comme l'ancien** quand on trace en zoomant ; il jugera sur pièce, avec cette page.
+
+**Construit.** `packages/engine` : `outline.ts` (contour d'un trait d'épaisseur variable), `render.ts` (l'interface `Renderer` et `selectDrawableSections`), largeur par point, renommage `bout` → `section`. `packages/renderer-fabric` : `FabricRenderer` (fabric 7.4.0, un `StaticCanvas`, un `Path` par section, gardé en cache tant que la section existe). `apps/zveceditor` : `Editor` (comportement de l'outil, sans DOM, testé) et `main.ts` (événements du navigateur, boucle d'images, affichage de contrôle). 115 tests (94 pour le moteur, 21 pour l'éditeur), build TypeScript strict sans erreur.
+
+**Gestes.** Bouton gauche : tracer. Molette : zoomer autour du pointeur, y compris en traçant (formule de l'ancien code : facteur `1 − deltaY / 500`, borné ; elle est additive en `deltaY`, donc trois crans d'un coup valent ×1,6 et trois crans séparés ×1,73). Bouton droit, bouton du milieu, ou Espace + gauche : déplacer la vue. `Ctrl+Z` : annuler le dernier trait. `0` : revenir à la vue de départ. Les touches `²` et `` ` `` de l'ancienne version ne sont pas reprises.
+
+**Mesures dans le navigateur** (Chrome dans le panneau Browser, écran à l'échelle 1,5, serveur de développement Vite ; lecture des pixels du canvas) :
+
+1. **Placement.** Un disque de 20 px posé en (100, 50) tombe exactement sur l'écran en (500, 350) : la transformation par `pathOffset` et `applyTransformToObject` est la bonne.
+2. **Dégradé.** Un trait dont l'épaisseur passe linéairement de 4 à 24 px sur 600 px, mesuré par la couverture des pixels (précis sous le pixel) : écart maximal de 0,003 px, et variation de 0,329 à 0,335 px par pas de 10 px (0,333 attendu). Aucune marche.
+3. **Précision du canvas.** Erreur, en pixels, de la position de l'extrémité d'un trait fin, selon l'écart de niveaux (le plancher de 0,07 px vient de la taille du pixel de l'écran) :
+
+| Étendue de la section | écart 6 à 12 | 13 | 14 | 16 | 18 |
+| --------------------- | ------------ | -- | -- | -- | -- |
+| 10 unités locales | 0,07 | 0,07 | 0,07 | 0,07 | 0,07 |
+| 100 unités locales | 0,07 | 0,07 | 0,07 | −0,6 | 0,07 (au hasard) |
+| 1 000 unités locales | 0,07 | −0,6 | −0,6 | −3,9 | −22,6 (trait absent de la colonne mesurée) |
+
+   Avec 100 unités locales, l'erreur atteint −1,3 px à 20 niveaux, −97 px à 24, et rien n'est dessiné à 30 et 40. Ce n'est donc pas une limite en niveaux mais en **étendue en pixels** (distance de l'ancrage à l'extrémité, multipliée par l'échelle) : sous environ 6 millions de pixels l'erreur reste sous 0,1 px, vers 10 millions elle vaut 0,6 px. Le canvas du navigateur calcule en simple précision. `selectDrawableSections` applique donc `DEFAULT_MAX_REACH_PIXELS = 4e6`, plus `maxLevelGap = 24` comme dans l'ancien code.
+4. **Un essai de placement près de l'écran.** En posant l'objet fabric sur un point de la section proche de l'écran (au lieu de son ancrage), l'erreur reste au plancher de mesure jusqu'à 80 niveaux d'écart, pour des traits fins. Mais en vrai, un trait de 3 px dessiné à un niveau devient, vu 12 niveaux plus profond, une bande d'environ 12 000 px de large, dont les bords sont des arcs de très grand rayon : le même problème de précision revient pour ces bords. Il faudrait calculer le contour en double précision et le découper au cadre de l'écran avant de le donner au canvas. **Non fait**, hors du périmètre de cette étape.
+
+**Conséquence par rapport à l'ancienne version, à connaître.** L'ancien code dessinait les objets jusqu'à 24 niveaux plus grands que l'écran. Ici, une section de 100 unités locales n'est plus dessinée au-delà d'environ 14 niveaux de zoom avant, et une de 1 000 unités au-delà d'environ 12. Quand on zoome plus profondément dans un trait dessiné plus tôt, il disparaît (écran blanc), là où l'ancienne version l'aurait montré comme une grande masse noire. Quand on dessine en zoomant, ce n'est pas visible (les sections récentes sont proches du niveau courant), c'est quand on revient zoomer dans un dessin. À juger à l'usage.
+
+**Vérifié à l'usage** (page lancée dans le panneau Browser) :
+- un trait au vrai glisser de la souris : 1 trait, au bon endroit ;
+- une spirale tracée en zoomant (700 événements, ×1,012 chacun) : 13 sections, trait lisse dont l'épaisseur diminue progressivement ;
+- une plongée de 130 niveaux en traçant (800 événements, ×1,12 chacun, injectés par le chemin normal de la page) : 131 sections et 931 points, traités en 13 ms ; la page n'en dessine que 4 à ce niveau ; bords lisses, pas de coupure aux jonctions ;
+- le dézoom de ce trait, de 130 niveaux jusqu'à −6, en passant par 100, 60 et 8 : le trait reste lisse et s'épaissit vers les sections anciennes, puis se réduit à un point ;
+- la vraie molette et la vraie touche `0`, via les outils du panneau ; aucune erreur dans la console.
+
+**Pas vérifié** : le déplacement de la vue avec les boutons droit et milieu, ou avec Espace (tests unitaires seulement) ; le tactile et le stylet ; Firefox et Safari ; une plongée de 200 niveaux ; et surtout la sensation de dessin « comme dans l'ancienne version », qui revient à Sébastien.
+
+**Suite possible, selon ce qu'il constatera.** (1) Dessiner les sections lointaines : contour en double précision découpé au cadre, pour retrouver et dépasser les 24 niveaux de l'ancien. (2) Animer le zoom. (3) Reprendre les gestes `²` et molette de l'ancien. (4) Sauvegarder et charger un dessin (le format JSON existe, pas de bouton).
+
+## Le stylo lissé et le déplacement de la vue en traçant (2026-10-18)
+
+Premiers retours de Sébastien sur la page jouable : « très satisfaisant », avec deux remarques. (1) Le trait tremble avec la souris : il veut garder le mode brut et avoir **en plus** un mode lisse, plus tendu. (2) Dans l'ancienne version, bouton gauche enfoncé, on pouvait appuyer sur le bouton droit pour déplacer la vue, puis continuer son trait.
+
+**Lissage : une corde** (`apps/zveceditor/src/rope.ts`). Le pinceau est attaché au pointeur par une corde de longueur fixe, **en pixels d'écran** (c'est là que la main tremble). Tant que le pointeur reste à moins d'une longueur de corde, le pinceau ne bouge pas ; au-delà, il est tiré en ligne droite vers le pointeur jusqu'à être exactement à une longueur de lui. Le trait suit donc le pointeur avec un retard d'au plus une longueur de corde, et se termine là où l'on relâche (un dernier segment droit). Pour dessiner plus fin, on zoome : un écran infini rend ce réglage naturel. Longueurs : 4, 8, 16, 32, 64, 128 px ; 16 au départ ; 0 = stylo brut (comportement d'avant). `S` bascule, `[` et `]` règlent, le choix est mémorisé par le navigateur. Choix fait avec Sébastien : corde en temps réel, mode lisse au démarrage.
+
+La corde suit le dessin quand la vue change : un zoom autour du pointeur ramène le pinceau à `pivot + (pinceau − pivot) × ratio`, un déplacement de la vue le décale d'autant. Le bout du trait reste ainsi sur le même endroit du dessin.
+
+**Mesures** (même séquence de tremblements, ±4,5 px à 3 px d'intervalle, une droite de 410 px ; rugosité = écart-type de la position verticale des points enregistrés, dans le navigateur) :
+
+| Stylo | rugosité |
+| ----- | -------- |
+| brut | 2,5 px |
+| corde de 16 px | 0,66 px |
+| corde de 32 px | 0,42 px |
+
+Soit 3,8 fois plus lisse à 16 px. Les tests (`rope.test.ts`, `editor-pen.test.ts`) obtiennent au moins un facteur 3 avec 32 px sur une autre séquence. **La corde supprime le tremblement, pas les points** : tant que le pointeur avance, le pinceau avance au même rythme, donc le nombre de points ne baisse pas (une de mes hypothèses de test était fausse là-dessus).
+
+**Déplacer la vue en traçant** (`Editor`). L'état est maintenant fait de trois choses indépendantes : un trait ouvert, des boutons de déplacement (droit et milieu), et Espace + gauche. Appuyer sur le bouton droit pendant un tracé met le trait en pause (il reste ouvert, rien n'est ajouté) ; la vue suit le pointeur ; au relâchement, le trait reprend **depuis son propre bout**, sans saut : le contenu suit le pointeur, donc le dernier point tracé et le pointeur se déplacent du même décalage. Appuyer sur le bouton gauche pendant un déplacement est ignoré ; relâcher le gauche pendant un déplacement ferme le trait.
+
+**Piège du navigateur, traité.** Quand on appuie sur un second bouton de la souris alors qu'un premier est enfoncé, le navigateur n'envoie **pas** de `pointerdown` : il envoie un `pointermove` dont le masque `event.buttons` a changé (idem au relâchement d'un seul des deux). `main.ts` compare donc le masque à chaque événement de pointeur (`controls.ts`, `buttonChanges`) au lieu de se fier à `event.button`.
+
+**Vérifié dans le navigateur** : la touche `S` (vraie touche) bascule et se mémorise, `[` et `]` aussi, `Ctrl+Z` aussi ; les trois stylos comparés sur une capture (brut, 16 px, 32 px) ; la séquence d'événements d'un geste gauche + droit (masques `buttons` 1, 3, 1) : le trait reste ouvert, ne grandit pas pendant le déplacement, la vue suit le pointeur de (100, 60), le trait reprend sans saut (50 px au plus entre deux points) ; une plongée de 163 niveaux avec la corde de 32 px (164 sections, 1 160 points, aucune erreur).
+
+**Pas vérifié** : le geste réel avec deux boutons de souris tenus ensemble (les outils du panneau ne peuvent pas le faire : seule la séquence d'événements a été rejouée) ; Firefox et Safari ; la sensation du retard de la corde à la main, à juger par Sébastien. **Écarté** : lisser le trait après coup par ajustement de courbes (pas de retard mais la forme change au relâchement ; chantier plus lourd, notamment à travers plusieurs niveaux de zoom).
 
 ## Critères de réussite du tronçon
 
 - `packages/engine` : tests Vitest qui passent. En particulier :
   - aller-retour écran ↔ monde à de grandes profondeurs (par exemple ±1000 niveaux de zoom) sans dérive ;
   - un trait tracé en changeant de zoom garde la même forme quand on le regarde à l'échelle de départ ;
-  - les bouts successifs partagent exactement leur point de jonction ;
+  - les sections successives partagent exactement leur point de jonction ;
   - un point tracé à un niveau profond ne se « téléporte » pas quand on dézoome.
-- `apps/zveceditor` : une page dans le navigateur où l'on trace en zoomant (molette pendant que le bouton est enfoncé), sans artefact visible, jusqu'à au moins 200 niveaux de profondeur.
-- Un document de mesure simple : nombre de points et de bouts par trait, et temps d'une image, pour savoir si les décisions 2 et 3 tiennent.
+- `apps/zveceditor` : une page dans le navigateur où l'on trace en zoomant (molette pendant que le bouton est enfoncé), sans artefact visible, jusqu'à au moins 200 niveaux de profondeur. **Fait pour 130 niveaux** (voir les résultats) ; 200 niveaux n'ont pas été essayés.
+- Un document de mesure simple : nombre de points et de sections par trait, et temps d'une image, pour savoir si les décisions 2 et 3 tiennent. **Fait** pour les points, les sections et le temps de traitement des événements ; le temps d'une image dans un navigateur n'a pas été mesuré.
 
 ## Hors périmètre de ce tronçon
 
