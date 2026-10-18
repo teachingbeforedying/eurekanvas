@@ -37,7 +37,8 @@ Le facteur de zoom continu (molette) est stocké comme `zLevel` (entier) + un fa
 
 Comme dans l'ancien code, un trait qui traverse plusieurs niveaux de zoom est découpé en **bouts**, un par échelle :
 
-- chaque bout a un **ancrage exact** (valeur dyadique) et des **points en flottants locaux**, exprimés dans les unités de son propre niveau ;
+- chaque bout a un **ancrage exact** (valeur dyadique), un `zLevel` entier et des **points en flottants locaux** : un point local vaut `(position − ancrage) × 2^zLevel`, et sa position exacte est **définie** comme `ancrage + local × 2^-zLevel` ;
+- un nouveau bout commence dès que le `zLevel` de la caméra change ; le facteur continu de la molette à l'intérieur d'un niveau n'a aucun effet, les unités locales n'en dépendent pas ;
 - chaque bout devient un objet fabric dans son propre repère ; une transformation relative à la caméra le place à l'écran ;
 - le dernier point d'un bout est **le même point exact** que le premier du bout suivant (pas de trou à la jonction) ;
 - la jonction entre deux objets fabric ne doit pas se voir : extrémités arrondies, à vérifier visuellement.
@@ -95,6 +96,60 @@ Soit 2 à 3 µs par point avec un centre de 1 000 bits. `zoomAt` : 6,5 µs par a
 **Limite de précision de l'écran.** Une coordonnée écran est un `number` : près de 400, son pas est d'environ 6e-14 pixel. Un point à moins de cet écart du milieu est donc affiché *au* milieu, même si son décalage exact est connu. C'est sans conséquence pour l'affichage, mais ça compte pour les tests : un premier test de dézoom comparait des distances à l'écran et échouait (1,7e-9 d'écart relatif) parce qu'il mesurait cet arrondi et non la caméra. Il ne compare maintenant les distances que lorsqu'elles sont mesurables.
 
 **Pas encore vérifié** : le comportement avec fabric 7, dans un navigateur, avec des traits en bouts, et la lecture du `zLevel` de l'ancien code.
+
+## Sérialisation et export
+
+La question posée : ces traits « un peu particuliers » peuvent-ils être sauvegardés et lus ailleurs, ou seul notre logiciel peut-il les afficher ? Trois niveaux.
+
+1. **Format natif, sans perte** : JSON versionné `eurekanvas/stroke`, spécifié dans [format-trait.md](./format-trait.md). Ancrages exacts écrits en texte (`"3/2^-4"`), points en nombres. Tout langage qui sait lire de grands entiers peut le lire, donc des lecteurs tiers sont possibles. En pratique, notre moteur sera le seul à afficher un trait **en entier à toute profondeur**.
+2. **Exports vers les formats courants, avec perte assumée** (pas encore faits) : instantané d'une vue en SVG, PNG ou PDF, en projetant les bouts visibles ; vidéo ou GIF du zoom, qui raconte la plongée telle qu'elle a été dessinée ; pour du raster, une pyramide de tuiles bornée en profondeur. À ma connaissance (non vérifié), les formats courants reposent sur des flottants 32 ou 64 bits : un trait de 700 niveaux n'y tient pas en un seul repère, d'où la perte. Un instantané ne contient que ce qui est visible à l'échelle de la vue (ce qui est bien plus petit qu'un pixel, ou hors de l'écran, disparaît) ; la fourchette de niveaux utile dépend de la précision de l'application qui ouvrira le fichier, et n'a pas été mesurée.
+3. **Visionneur web** : le moteur est du JavaScript, donc un lien vers le site suffit pour que quelqu'un voie le trait en entier.
+
+Un export exige un style de trait (couleur, épaisseur), absent du modèle pour l'instant : il viendra avec le rendu.
+
+## Résultats : traits découpés en bouts (2026-10-18)
+
+Construit : `stroke.ts` (modèle, enregistreur, projection, JSON), 24 tests ; 68 tests au total, build TypeScript strict sans erreur. Toujours sans fabric.
+
+**Ce que les tests montrent.**
+- Un trait tracé en zoomant (pointeur sur un cercle, puis pointeur qui erre) à travers 211 niveaux garde sa forme : l'écart entre le point sous le pointeur et le point enregistré reste sous 1e-9 unité locale.
+- Il y a exactement un bout par niveau traversé, en zoom avant comme en zoom arrière.
+- Les jonctions sont exactement partagées (égalité des dyadiques).
+- Les coordonnées locales restent petites à n'importe quelle profondeur, ce qui est le but des bouts. Plus grande valeur mesurée sur 3 000 événements et 211 niveaux : 112 pour un pointeur qui tourne en cercle, 1 255 dans le pire cas (le pointeur saute à travers tout l'écran à chaque événement). Les tests exigent moins de 5 000.
+- Un va-et-vient du zoom autour d'une frontière de niveau crée un bout par événement. C'est le pire cas de la règle simple « un bout par niveau » ; il reste exact. Une hystérésis pourra l'atténuer si fabric montre un problème.
+- Contrôle par mutation : en ancrant le nouveau bout sur le mauvais point, 10 tests échouent ; en inversant le signe du niveau dans `pointWorld`, 9 échouent (chaque modification a été défaite ensuite).
+
+**Vitesse** (Node 24, une machine, script jetable non conservé ; trait de 10 000 points, 1 375 niveaux de profondeur) :
+
+| Opération | Coût |
+| --------- | ---- |
+| `addPoint` | 1,8 µs par point |
+| `strokeWorldPoints`, 10 000 points | 13 ms |
+| `strokeToJSON` + `JSON.stringify` | 7,6 ms |
+| `projectBout`, 212 bouts (une image) | 0,37 ms (1,8 µs par bout) |
+
+**Taille du JSON** pour ce trait (1 376 bouts, 11 375 points) : 1 082 Kio, dont 638 Kio pour les ancrages (59 %) ; 403 Kio avec gzip. Les ancrages sont redondants (celui d'un bout est le dernier point du précédent) : une version future pourrait les omettre et diviser la taille par deux environ. La version 1 les garde pour que chaque bout soit lisible seul.
+
+**Erreur de la projection en flottants** (`origin + local × scale`) selon l'écart de niveaux entre la caméra et le bout, pire cas sur 30 positions à l'écran, en pixels :
+
+| Étendue du bout | écart 0 | 10 | 20 | 30 | 40 | 50 |
+| --------------- | ------- | -- | -- | -- | -- | -- |
+| 10 unités locales | 0 | 2e-12 | 2e-9 | 2e-6 | 2e-3 | 1,9 |
+| 100 unités locales | 6e-14 | 1,5e-11 | 2,5e-8 | 2,8e-5 | 1,6e-2 | 20 |
+| 1 000 unités locales | 2e-13 | 2e-10 | 2e-7 | 2e-4 | 0,24 | 350 |
+
+L'erreur est multipliée par environ 1 000 tous les 10 niveaux. **Règle proposée** : projeter un bout par la voie rapide (`projectBout`) quand l'écart de niveaux est d'au plus 30 (erreur sous 3e-4 px pour des bouts de moins de 1 000 unités locales), et au-delà projeter chaque point par la voie exacte (`pointWorld` puis `worldToScreen`, environ 3 µs par point). Le seuil sera fixé avec les zones de rendu.
+
+**Leçons de la mise au point, pour mémoire.**
+- Une première mesure de cette erreur donnait 0 partout : le point était pile au milieu d'un écran de taille paire, donc aligné sur la grille des flottants, et l'arrondi se compensait. La mesure ci-dessus utilise un écran de taille impaire et 30 positions quelconques.
+- Trois tests échouaient d'abord par erreur de test (pointeur collé à un coin de l'écran, point de départ du zoom arrière, va-et-vient qui ne franchissait aucune frontière de niveau), pas par défaut du modèle.
+- Un calcul fait à la collecte des tests (dans le corps d'un `describe`) faisait disparaître tous les tests du fichier quand il échouait ; il est maintenant dans un `beforeAll`.
+
+**Pas encore vérifié** : fabric, un navigateur, un vrai pointeur, la sensation de dessin « comme dans l'ancienne version ».
+
+## Suite : de quoi tester à la main
+
+Rien de ce qui précède ne se teste encore avec la souris. L'objectif de Sébastien est un moteur qui se comporte **comme l'ancien** quand on trace en zoomant, et il jugera sur pièce. L'étape suivante est donc une page jouable dans `apps/zveceditor` : tracer avec la souris, zoomer à la molette autour du pointeur y compris pendant le tracé, afficher le trait par fabric 7. Gestes de l'ancienne version à reprendre ou à adapter (README de `a-user-interface`) : tracer en gardant la touche `²` (ou `` ` ``) enfoncée et en cliquant ; molette pour zoomer, avec « l'index fait défiler la molette pendant que le majeur clique » pour tracer et zoomer en même temps.
 
 ## Critères de réussite du tronçon
 

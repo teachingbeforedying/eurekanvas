@@ -12,6 +12,10 @@ at any zoom depth, objects, z-index, save and load.
 - `src/camera.ts`: an immutable camera with an exact center and an integer zoom level; screen ↔ world
   conversion, pan, and zoom that keeps the point under the cursor exactly where it is.
 
+- `src/stroke.ts`: strokes drawn while zooming, split into "bouts" (an exact anchor plus small float
+  offsets), a recorder, projection to the screen, and a JSON form
+  (specified in [docs/format-trait.md](../../docs/format-trait.md)).
+
 Design notes and measurements: [docs/noyau.md](../../docs/noyau.md).
 
 Not yet: strokes, rendering (fabric.js), zones, objects.

@@ -19,6 +19,22 @@ export {
   toNumber,
 } from "./dyadic";
 export {
+  type Bout,
+  type BoutProjection,
+  type LocalPoint,
+  type Stroke,
+  type StrokeJSON,
+  STROKE_FORMAT,
+  STROKE_FORMAT_VERSION,
+  StrokeRecorder,
+  localToScreen,
+  pointWorld,
+  projectBout,
+  strokeFromJSON,
+  strokeToJSON,
+  strokeWorldPoints,
+} from "./stroke";
+export {
   type Camera,
   type CameraOptions,
   type Point,

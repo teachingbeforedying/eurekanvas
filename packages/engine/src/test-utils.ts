@@ -1,5 +1,12 @@
 // Helpers shared by the tests. Not part of the engine's public API.
 
+/** `items[index]`, failing loudly instead of returning `undefined`. */
+export function at<T>(items: readonly T[], index: number): T {
+  const item = items[index];
+  if (item === undefined) throw new Error(`no item at index ${index}`);
+  return item;
+}
+
 export interface Random {
   /** A float in [0, 1). */
   next(): number;
