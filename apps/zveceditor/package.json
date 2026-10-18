@@ -1,0 +1,13 @@
+{
+  "name": "@eurekanvas/zveceditor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A 2.5D vector editor on the infinite canvas",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview"
+  }
+}
