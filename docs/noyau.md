@@ -200,7 +200,7 @@ L'objectif de Sébastien est un moteur qui se comporte **comme l'ancien** quand 
 
 Premiers retours de Sébastien sur la page jouable : « très satisfaisant », avec deux remarques. (1) Le trait tremble avec la souris : il veut garder le mode brut et avoir **en plus** un mode lisse, plus tendu. (2) Dans l'ancienne version, bouton gauche enfoncé, on pouvait appuyer sur le bouton droit pour déplacer la vue, puis continuer son trait.
 
-**Lissage : une corde** (`apps/zveceditor/src/rope.ts`). Le pinceau est attaché au pointeur par une corde de longueur fixe, **en pixels d'écran** (c'est là que la main tremble). Tant que le pointeur reste à moins d'une longueur de corde, le pinceau ne bouge pas ; au-delà, il est tiré en ligne droite vers le pointeur jusqu'à être exactement à une longueur de lui. Le trait suit donc le pointeur avec un retard d'au plus une longueur de corde, et se termine là où l'on relâche (un dernier segment droit). Pour dessiner plus fin, on zoome : un écran infini rend ce réglage naturel. Longueurs : 4, 8, 16, 32, 64, 128 px ; 16 au départ ; 0 = stylo brut (comportement d'avant). `S` bascule, `[` et `]` règlent, le choix est mémorisé par le navigateur. Choix fait avec Sébastien : corde en temps réel, mode lisse au démarrage.
+**Lissage : une corde** (`apps/zveceditor/src/rope.ts`). Le pinceau est attaché au pointeur par une corde de longueur fixe, **en pixels d'écran** (c'est là que la main tremble). Tant que le pointeur reste à moins d'une longueur de corde, le pinceau ne bouge pas ; au-delà, il est tiré en ligne droite vers le pointeur jusqu'à être exactement à une longueur de lui. Le trait suit donc le pointeur avec un retard d'au plus une longueur de corde, et se termine là où l'on relâche (un dernier segment droit ; remplacé le 2026-10-25 : le trait s'arrête au pinceau, voir « Fin de trait et corde qui suit la vitesse »). Pour dessiner plus fin, on zoome : un écran infini rend ce réglage naturel. Longueurs : 4, 8, 16, 32, 64, 128 px ; 16 au départ ; 0 = stylo brut (comportement d'avant). `S` bascule, `[` et `]` règlent, le choix est mémorisé par le navigateur. Choix fait avec Sébastien : corde en temps réel, mode lisse au démarrage.
 
 La corde suit le dessin quand la vue change : un zoom autour du pointeur ramène le pinceau à `pivot + (pinceau − pivot) × ratio`, un déplacement de la vue le décale d'autant. Le bout du trait reste ainsi sur le même endroit du dessin.
 
@@ -221,6 +221,36 @@ Soit 3,8 fois plus lisse à 16 px. Les tests (`rope.test.ts`, `editor-pen.test.t
 **Vérifié dans le navigateur** : la touche `S` (vraie touche) bascule et se mémorise, `[` et `]` aussi, `Ctrl+Z` aussi ; les trois stylos comparés sur une capture (brut, 16 px, 32 px) ; la séquence d'événements d'un geste gauche + droit (masques `buttons` 1, 3, 1) : le trait reste ouvert, ne grandit pas pendant le déplacement, la vue suit le pointeur de (100, 60), le trait reprend sans saut (50 px au plus entre deux points) ; une plongée de 163 niveaux avec la corde de 32 px (164 sections, 1 160 points, aucune erreur).
 
 **Pas vérifié** : le geste réel avec deux boutons de souris tenus ensemble (les outils du panneau ne peuvent pas le faire : seule la séquence d'événements a été rejouée) ; Firefox et Safari ; la sensation du retard de la corde à la main, à juger par Sébastien. **Écarté** : lisser le trait après coup par ajustement de courbes (pas de retard mais la forme change au relâchement ; chantier plus lourd, notamment à travers plusieurs niveaux de zoom).
+
+## Fin de trait et corde qui suit la vitesse (2026-10-25)
+
+Deux demandes de Sébastien. (1) Plus de segment droit à la fin d'un trait lissé. (2) Pouvoir dessiner des épingles à cheveux de rayon arbitraire : la corde fixe arrondit tout virage plus serré qu'elle.
+
+**La fin de trait : rien n'est ajouté au relâchement.** Le trait s'arrête là où est le pinceau, avec les deux cordes : ce qu'on voit pendant le tracé est ce qu'on obtient (« il faut que ce qui est visible soit ce que l'on obtient à la fin », Sébastien, après essai). Un geste plus court que la corde ne laisse qu'un point. Avec la corde-vitesse, la corde vaut 4 px pendant les 50 premières ms, donc seul un geste de moins de 4 px est concerné.
+
+Le chemin pour y arriver, pour mémoire :
+- Le pinceau est toujours tiré vers le pointeur : sa vitesse pointe vers lui (une courbe de poursuite). Au relâchement, le pointeur est donc sur la tangente du pinceau (mesuré : 0,000° sur des cercles de 100 à 400 px, avec des cordes de 16 à 128 px et des pas de 1 à 8 px). Une courbe tangente au trait qui tourne d'un seul côté ne peut pas rejoindre un point de sa tangente : un arc tangent qui finit au pointeur est une droite.
+- Une première version continuait la courbure du trait et finissait à côté du pointeur. La courbure était lue sur trois points du chemin du pinceau, espacés de deux fois la longueur de la fin. Avec un espacement de la moitié seulement, le tremblement restant dans le chemin courbait la fin jusqu'à 7 px sur une ligne droite tremblée (±3 px). Après essai, Sébastien l'a écartée au profit de la règle ci-dessus, et le code a été supprimé (il n'avait pas été commité).
+
+**La corde qui suit la vitesse** (troisième mode). Sa longueur est la distance entre le pointeur et sa position 50 ms plus tôt (interpolée), bornée entre 4 et 128 px : un retard constant en temps. Une main rapide donne une corde longue et un trait tendu ; une main lente, une corde courte, et l'on serre un virage en ralentissant. Tant que les positions du pointeur ne couvrent pas le retard (début du trait, reprise après un déplacement de la vue), la longueur ne change pas : pas de rattrapage en ligne droite à la reprise. Le zoom ne touche pas à ces positions, puisque la main ne bouge pas.
+
+Écart entre le sommet du trait et celui du pointeur, en pixels, pour une épingle dont le virage est pris à 100 px/s (simulation, un événement toutes les 4 ms) :
+
+| Rayon du virage | corde fixe 16 | corde fixe 64 | vitesse, 25 ms | vitesse, 50 ms | vitesse, 100 ms |
+| --------------- | ------------- | ------------- | -------------- | -------------- | --------------- |
+| 5 px | 15,1 | 63,8 | 1,7 | 2,4 | 7,1 |
+| 10 px | 11,6 | 63,1 | 0,9 | 1,3 | 4,7 |
+| 20 px | 6,5 | 60,2 | 0,4 | 0,7 | 2,6 |
+
+Dans le navigateur (événements synthétiques minutés, virage de 10 px de rayon, lecture des pixels du canvas) : 1 px avec la corde-vitesse à 50 ms, 12 px avec la corde fixe de 16. Un arc tracé à 750 px/s puis relâché : le trait a le même nombre de points avant et après le relâchement (159), et s'arrête à une longueur de corde (36,5 px) du point de relâchement.
+
+**Freinage.** Une souris immobile n'envoie pas d'événement, donc la corde ne raccourcit pas quand la main s'arrête. Aucun segment droit n'a été mesuré au freinage (de 1 000 px/s à l'arrêt en 30 à 200 ms, sur un cercle) ; le trait s'arrête alors à 11 à 39 px du point de relâchement. **Mais** un appareil qui envoie des événements à l'arrêt (stylet ou tactile, non vérifié) ferait rattraper le pointeur en ligne droite : jusqu'à 41 px mesurés en simulation. Sébastien a choisi d'essayer sans limiter la vitesse à laquelle la corde raccourcit.
+
+**Touches.** `S` passe du stylo brut à la corde fixe, puis à la corde-vitesse. `[` et `]` règlent la longueur de la corde fixe (4 à 128 px) ou le retard (25 à 400 ms) ; ils marchent aussi avec AltGr (clavier AZERTY, que le navigateur signale comme Ctrl+Alt). Le panneau affiche la longueur de la corde pendant un tracé. Les réglages sont mémorisés sous `zveceditor.pen` ; l'ancienne clé `zveceditor.rope` est ignorée.
+
+**Contrôle par mutation** : 5 modifications volontaires (un rattrapage du pointeur au relâchement, les positions gardées après un déplacement de la vue, pas de minimum de 4 px, pas d'interpolation, une corde-vitesse qui ne suit jamais la main) ; chacune fait échouer au moins un test.
+
+**Pas vérifié** : le stylet et le tactile ; Firefox et Safari ; un zoom en plein tracé avec la corde-vitesse dans le navigateur (tests unitaires seulement).
 
 ## Critères de réussite du tronçon
 

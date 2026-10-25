@@ -1,4 +1,15 @@
-import { type Button, DEFAULT_ROPE_LENGTH, ROPE_LENGTHS } from "./editor";
+import {
+  type Button,
+  DEFAULT_LAG,
+  DEFAULT_PEN,
+  DEFAULT_ROPE_LENGTH,
+  LAG_TIMES,
+  type Pen,
+  type PenKind,
+  ROPE_LENGTHS,
+  SPEED_ROPE_MAX,
+} from "./editor";
+import { MIN_SPEED_ROPE } from "./rope";
 
 export interface ButtonChange {
   readonly button: Button;
@@ -30,30 +41,55 @@ export function buttonChanges(before: number, after: number): ButtonChange[] {
   return changes;
 }
 
-/** The next rope length when stepping to a shorter (`-1`) or longer (`1`) one. The raw pen (0) stays raw. */
-export function stepRope(current: number, direction: -1 | 1): number {
-  if (current === 0) return 0;
-  const lengths: readonly number[] = ROPE_LENGTHS;
-  const index = lengths.indexOf(current);
-  if (index < 0) return DEFAULT_ROPE_LENGTH;
-  const next = Math.min(lengths.length - 1, Math.max(0, index + direction));
-  return lengths[next] ?? DEFAULT_ROPE_LENGTH;
+/** The order in which `S` goes through the kinds of pen. */
+const PEN_KINDS: readonly PenKind[] = ["raw", "fixed", "speed"];
+
+/** The next value of `values` when stepping down (`-1`) or up (`1`), stopping at both ends. An unknown value gives `fallback`. */
+function step(values: readonly number[], current: number, direction: -1 | 1, fallback: number): number {
+  const index = values.indexOf(current);
+  if (index < 0) return fallback;
+  return values[Math.min(values.length - 1, Math.max(0, index + direction))] ?? fallback;
 }
 
-/** Switches between the raw pen and the smooth one, coming back to the last smooth rope length. */
-export function toggleRope(current: number, lastSmooth: number): number {
-  return current > 0 ? 0 : lastSmooth;
+/** The pen after `[` (`-1`) or `]` (`1`): a shorter or longer rope, or a shorter or longer lag. The raw pen stays as it is. */
+export function stepPen(pen: Pen, direction: -1 | 1): Pen {
+  if (pen.kind === "fixed") return { ...pen, length: step(ROPE_LENGTHS, pen.length, direction, DEFAULT_ROPE_LENGTH) };
+  if (pen.kind === "speed") return { ...pen, lag: step(LAG_TIMES, pen.lag, direction, DEFAULT_LAG) };
+  return pen;
 }
 
-/** Reads a rope length that was stored as text. Anything unexpected gives the default. */
-export function parseStoredRope(stored: string | null): number {
-  if (stored === null || stored.trim() === "") return DEFAULT_ROPE_LENGTH; // `Number("")` would be 0
-  const value = Number(stored);
-  const lengths: readonly number[] = ROPE_LENGTHS;
-  return value === 0 || lengths.includes(value) ? value : DEFAULT_ROPE_LENGTH;
+/** The pen after `S`: raw, then the rope of fixed length, then the rope that follows the speed, then raw again. */
+export function nextPen(pen: Pen): Pen {
+  return { ...pen, kind: PEN_KINDS[(PEN_KINDS.indexOf(pen.kind) + 1) % PEN_KINDS.length] ?? DEFAULT_PEN.kind };
 }
 
-/** What the box at the top left says about the pen. */
-export function describePen(ropeLength: number): string {
-  return ropeLength > 0 ? `pen: smooth, rope of ${ropeLength} px   (S: raw pen, [ ]: shorter or longer rope)` : `pen: raw   (S: smooth pen)`;
+/** Reads a pen that was stored as JSON. A missing or unexpected field gets its default value. */
+export function parseStoredPen(stored: string | null): Pen {
+  let value: unknown = null;
+  try {
+    if (stored !== null) value = JSON.parse(stored);
+  } catch {
+    // not JSON: the defaults
+  }
+  const fields = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const one = <T>(values: readonly T[], field: unknown, fallback: T): T => values.find((each) => each === field) ?? fallback;
+  return {
+    kind: one(PEN_KINDS, fields.kind, DEFAULT_PEN.kind),
+    length: one<number>(ROPE_LENGTHS, fields.length, DEFAULT_PEN.length),
+    lag: one<number>(LAG_TIMES, fields.lag, DEFAULT_PEN.lag),
+  };
+}
+
+/** What the box at the top left says about the pen. `ropeNow` is the length of the rope while a stroke is drawn. */
+export function describePen(pen: Pen, ropeNow: number | null = null): string {
+  switch (pen.kind) {
+    case "raw":
+      return `pen: raw   (S: next pen)`;
+    case "fixed":
+      return `pen: smooth, rope of ${pen.length} px   (S: next pen, [ ]: shorter or longer rope)`;
+    case "speed": {
+      const now = ropeNow === null ? "" : `, now ${Math.round(ropeNow)} px`;
+      return `pen: smooth, rope follows the speed: ${pen.lag} ms of lag, ${MIN_SPEED_ROPE} to ${SPEED_ROPE_MAX} px${now}   (S: next pen, [ ]: shorter or longer lag)`;
+    }
+  }
 }

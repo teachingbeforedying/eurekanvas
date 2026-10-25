@@ -1,7 +1,7 @@
 import { type ScreenPoint, type Viewport, log2Scale } from "@eurekanvas/engine";
 import { FabricRenderer } from "@eurekanvas/renderer-fabric";
-import { buttonChanges, describePen, parseStoredRope, stepRope, toggleRope } from "./controls";
-import { DEFAULT_ROPE_LENGTH, Editor } from "./editor";
+import { buttonChanges, describePen, nextPen, parseStoredPen, stepPen } from "./controls";
+import { Editor, type Pen } from "./editor";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const hud = document.getElementById("hud");
@@ -15,26 +15,23 @@ const editor = new Editor(windowViewport());
 const renderer = new FabricRenderer(canvas, editor.viewport);
 
 // The pen: smooth by default, and the choice is remembered by the browser (the page works without it).
-const ROPE_STORAGE_KEY = "zveceditor.rope";
-function storedRopeLength(): number {
+const PEN_STORAGE_KEY = "zveceditor.pen";
+function storedPen(): Pen {
   try {
-    return parseStoredRope(localStorage.getItem(ROPE_STORAGE_KEY));
+    return parseStoredPen(localStorage.getItem(PEN_STORAGE_KEY));
   } catch {
-    return DEFAULT_ROPE_LENGTH;
+    return parseStoredPen(null);
   }
 }
-function chooseRopeLength(length: number): void {
-  editor.setRopeLength(length);
-  if (editor.ropeLength > 0) lastSmoothRope = editor.ropeLength;
+function choosePen(pen: Pen): void {
+  editor.setPen(pen);
   try {
-    localStorage.setItem(ROPE_STORAGE_KEY, String(editor.ropeLength));
+    localStorage.setItem(PEN_STORAGE_KEY, JSON.stringify(editor.pen));
   } catch {
     // not remembered, that is all
   }
 }
-let lastSmoothRope = DEFAULT_ROPE_LENGTH;
-editor.setRopeLength(storedRopeLength());
-if (editor.ropeLength > 0) lastSmoothRope = editor.ropeLength;
+editor.setPen(storedPen());
 
 // Frames are drawn at most once per animation frame, and only when something changed.
 let frameRequested = false;
@@ -54,7 +51,7 @@ function updateHud(): void {
   hud!.textContent = [
     `zoom 2^${log2Scale(camera).toFixed(2)}   (level ${camera.zLevel}, factor ${camera.factor.toFixed(3)})`,
     `strokes ${stats.strokes} · sections ${stats.sections} · points ${stats.points} · drawn sections ${renderer.drawnSections}`,
-    describePen(editor.ropeLength),
+    describePen(editor.pen, editor.ropeNow),
     ``,
     `draw: left button    zoom: wheel (also while drawing)`,
     `move the view: right or middle button (also while drawing), or Space + left button`,
@@ -71,9 +68,9 @@ function position(event: MouseEvent): ScreenPoint {
 // does not send a `pointerdown`, only a `pointermove` with another `buttons` mask: so the buttons are
 // compared at every pointer event.
 let buttonsDown = 0;
-function syncButtons(buttons: number, p: ScreenPoint): void {
+function syncButtons(buttons: number, p: ScreenPoint, time: number): void {
   for (const change of buttonChanges(buttonsDown, buttons)) {
-    if (change.pressed) editor.pointerDown(p, change.button);
+    if (change.pressed) editor.pointerDown(p, change.button, time);
     else editor.pointerUp(change.button);
   }
   buttonsDown = buttons;
@@ -87,7 +84,7 @@ canvas.addEventListener("pointerdown", (event) => {
   } catch {
     // drawing still works without the capture
   }
-  syncButtons(event.buttons, position(event));
+  syncButtons(event.buttons, position(event), event.timeStamp);
   invalidate();
 });
 
@@ -96,15 +93,15 @@ canvas.addEventListener("pointermove", (event) => {
   const events = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
   for (const each of events.length > 0 ? events : [event]) {
     const p = position(each);
-    syncButtons(each.buttons, p);
-    editor.pointerMove(p);
+    syncButtons(each.buttons, p, each.timeStamp);
+    editor.pointerMove(p, each.timeStamp);
   }
   invalidate();
 });
 
 function release(event: PointerEvent): void {
   if (canvas!.hasPointerCapture(event.pointerId)) canvas!.releasePointerCapture(event.pointerId);
-  syncButtons(event.type === "pointercancel" ? 0 : event.buttons, position(event));
+  syncButtons(event.type === "pointercancel" ? 0 : event.buttons, position(event), event.timeStamp);
   invalidate();
 }
 canvas.addEventListener("pointerup", release);
@@ -137,10 +134,11 @@ window.addEventListener("keydown", (event) => {
     editor.resetView();
     invalidate();
   } else if (plain && event.key.toLowerCase() === "s") {
-    chooseRopeLength(toggleRope(editor.ropeLength, lastSmoothRope));
+    choosePen(nextPen(editor.pen));
     invalidate();
-  } else if (plain && (event.key === "[" || event.key === "]")) {
-    chooseRopeLength(stepRope(editor.ropeLength, event.key === "[" ? -1 : 1));
+  } else if (event.key === "[" || event.key === "]") {
+    // no `plain` here: some keyboards (French AZERTY) type them with AltGr, which the browser reports as Ctrl+Alt
+    choosePen(stepPen(editor.pen, event.key === "[" ? -1 : 1));
     invalidate();
   }
 });

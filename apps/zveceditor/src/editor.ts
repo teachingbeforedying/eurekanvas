@@ -17,10 +17,45 @@ export const WHEEL_STEP = 1 / 500;
 /** Thickness of the stroke on the screen, in pixels, at the moment it is drawn. */
 export const STROKE_WIDTH_PIXELS = 3;
 
-/** The rope lengths, in pixels, that the keys step through. A length of 0 is no rope: the raw pen. */
+/** The lengths, in pixels, that the keys step through for the rope of fixed length. */
 export const ROPE_LENGTHS = [4, 8, 16, 32, 64, 128] as const;
 
 export const DEFAULT_ROPE_LENGTH = 16;
+
+/** The lags, in milliseconds, that the keys step through for the rope that follows the speed of the hand. */
+export const LAG_TIMES = [25, 50, 100, 200, 400] as const;
+
+export const DEFAULT_LAG = 50;
+
+/** The longest rope that follows the speed of the hand, in pixels. */
+export const SPEED_ROPE_MAX = 128;
+
+export type PenKind = "raw" | "fixed" | "speed";
+
+/**
+ * The pen. `raw`: the stroke goes through every pointer position. `fixed`: a rope of `length` pixels (see
+ * `Rope`). `speed`: a rope as long as the distance the pointer moved in the last `lag` milliseconds, between
+ * `MIN_SPEED_ROPE` and `SPEED_ROPE_MAX` pixels. Each kind keeps its setting while another one is in use.
+ */
+export interface Pen {
+  readonly kind: PenKind;
+  readonly length: number;
+  readonly lag: number;
+}
+
+export const DEFAULT_PEN: Pen = { kind: "speed", length: DEFAULT_ROPE_LENGTH, lag: DEFAULT_LAG };
+
+/** The rope of one stroke drawn with `pen`. */
+function ropeFor(pen: Pen): Rope {
+  switch (pen.kind) {
+    case "raw":
+      return new Rope(0);
+    case "fixed":
+      return new Rope(pen.length);
+    case "speed":
+      return new Rope(SPEED_ROPE_MAX, pen.lag);
+  }
+}
 
 export type Button = "primary" | "middle" | "secondary";
 
@@ -48,9 +83,9 @@ export interface EditorStats {
  *   move, so zooming alone adds nothing to the stroke: the next pointer move continues it, with the
  *   thickness that makes it `STROKE_WIDTH_PIXELS` thick on the screen at that moment.
  *
- * The pen can be smoothed with a rope (see `Rope`): the stroke follows the pointer at a distance of at most
- * the rope length, which removes the tremor of a hand. Without a rope the stroke goes through every pointer
- * position.
+ * The pen can be smoothed with a rope (see `Rope` and `Pen`): the stroke follows the pointer at a distance of
+ * at most the rope length, which removes the tremor of a hand. Without a rope the stroke goes through every
+ * pointer position. Times are in milliseconds, as in `PointerEvent.timeStamp`.
  */
 export class Editor {
   private _camera: Camera = createCamera();
@@ -58,7 +93,7 @@ export class Editor {
   private readonly finished: Stroke[] = [];
   private recorder: StrokeRecorder | null = null;
   private rope = new Rope(0);
-  private _ropeLength = 0;
+  private _pen: Pen = { ...DEFAULT_PEN, kind: "raw" };
   /** How many of the secondary and middle buttons are down. */
   private panButtons = 0;
   /** The primary button is down with Space held: it moves the view instead of drawing. */
@@ -110,19 +145,23 @@ export class Editor {
     return this.panButtons > 0 || this.spacePanning;
   }
 
-  /** The length of the rope of the pen, in pixels. 0 is the raw pen. */
-  get ropeLength(): number {
-    return this._ropeLength;
+  get pen(): Pen {
+    return this._pen;
   }
 
-  /** Changes the rope for the next strokes. Ignored while a stroke is being drawn. */
-  setRopeLength(length: number): void {
-    new Rope(length); // refuses an invalid length
+  /** Changes the pen for the next strokes. Ignored while a stroke is being drawn. */
+  setPen(pen: Pen): void {
+    new Rope(pen.length, pen.lag); // refuses an invalid length or lag, whatever the kind
     if (this.isDrawing) return;
-    this._ropeLength = length;
+    this._pen = pen;
   }
 
-  pointerDown(p: ScreenPoint, button: Button): void {
+  /** The length of the rope now, in pixels, while a stroke is drawn; `null` otherwise. */
+  get ropeNow(): number | null {
+    return this.recorder ? this.rope.currentLength : null;
+  }
+
+  pointerDown(p: ScreenPoint, button: Button, time = performance.now()): void {
     if (button === "primary") {
       if (this.isDrawing || this.isMovingView) return; // a second press, or a press while the view moves
       this.last = p;
@@ -131,15 +170,15 @@ export class Editor {
         return;
       }
       this.recorder = new StrokeRecorder();
-      this.rope = new Rope(this._ropeLength);
-      this.recorder.addScreenPoint(this._camera, this._viewport, this.rope.start(p), STROKE_WIDTH_PIXELS);
+      this.rope = ropeFor(this._pen);
+      this.recorder.addScreenPoint(this._camera, this._viewport, this.rope.start(p, time), STROKE_WIDTH_PIXELS);
     } else {
       this.panButtons += 1;
       this.last = p;
     }
   }
 
-  pointerMove(p: ScreenPoint): void {
+  pointerMove(p: ScreenPoint, time = performance.now()): void {
     const dx = p.x - this.last.x;
     const dy = p.y - this.last.y;
     if (this.isMovingView) {
@@ -147,13 +186,16 @@ export class Editor {
       // the content follows the pointer, and so does the end of the stroke that is paused
       if (this.recorder) this.rope.shifted(dx, dy);
     } else if (this.recorder) {
-      const brush = this.rope.move(p);
+      const brush = this.rope.move(p, time);
       if (brush) this.recorder.addScreenPoint(this._camera, this._viewport, brush, STROKE_WIDTH_PIXELS);
     }
     this.last = p;
   }
 
-  /** A button was released. Releasing the primary button ends the stroke at the pointer. */
+  /**
+   * A button was released. Releasing the primary button ends the stroke where the brush is: nothing is added,
+   * so the stroke is what was visible while drawing, even if the rope kept the brush behind the pointer.
+   */
   pointerUp(button: Button = "primary"): void {
     if (button !== "primary") {
       this.panButtons = Math.max(0, this.panButtons - 1);
@@ -164,8 +206,6 @@ export class Editor {
       return;
     }
     if (this.recorder) {
-      const end = this.rope.finish(this.last);
-      if (end) this.recorder.addScreenPoint(this._camera, this._viewport, end, STROKE_WIDTH_PIXELS);
       this.finished.push(this.recorder.stroke);
       this.recorder = null;
     }

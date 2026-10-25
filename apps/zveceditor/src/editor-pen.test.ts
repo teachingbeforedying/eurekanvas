@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { type Point, type Viewport, equals, screenToWorld, strokeWorldPoints, sub, toNumber, worldToScreen } from "@eurekanvas/engine";
-import { Editor } from "./editor";
+import { DEFAULT_PEN, Editor, type Pen } from "./editor";
 
 const viewport: Viewport = { width: 1280, height: 720 };
+
+/** A rope of fixed length, or the raw pen for a length of 0. */
+function ropePen(length: number): Pen {
+  return length === 0 ? { ...DEFAULT_PEN, kind: "raw" } : { ...DEFAULT_PEN, kind: "fixed", length };
+}
 
 function samePoint(a: Point, b: Point): boolean {
   return equals(a.x, b.x) && equals(a.y, b.y);
@@ -114,7 +119,7 @@ function seeded(seed: number): () => number {
 function drawShakyLine(ropeLength: number): Editor {
   const random = seeded(5);
   const editor = new Editor(viewport);
-  editor.setRopeLength(ropeLength);
+  editor.setPen(ropePen(ropeLength));
   editor.pointerDown({ x: 100, y: 300 }, "primary");
   for (let x = 104; x <= 700; x += 4) editor.pointerMove({ x, y: 300 + (random() - 0.5) * 6 });
   editor.pointerUp();
@@ -123,8 +128,8 @@ function drawShakyLine(ropeLength: number): Editor {
 
 describe("the rope", () => {
   it("is the raw pen by default: every pointer position goes into the stroke", () => {
+    expect(new Editor(viewport).pen.kind).toBe("raw");
     const editor = drawShakyLine(0);
-    expect(editor.ropeLength).toBe(0);
     expect(editor.stats.points).toBe(1 + (700 - 100) / 4);
   });
 
@@ -139,55 +144,76 @@ describe("the rope", () => {
     const smooth = drawShakyLine(32);
     expect(deviation(smooth)).toBeLessThan(deviation(raw) / 3);
     // The rope removes the tremor, not the points: while the pointer keeps moving, so does the brush.
-    // It still ends where the pointer was released.
-    const rawEnd = worldPointsOfFirstStroke(raw).at(-1);
-    const smoothEnd = worldPointsOfFirstStroke(smooth).at(-1);
-    if (!rawEnd || !smoothEnd) throw new Error("missing end");
-    expect(samePoint(smoothEnd, rawEnd)).toBe(true);
   });
 
-  it("starts the stroke at the press and ends it at the release", () => {
+  it("starts the stroke at the press and ends it at the brush, one rope length behind the release", () => {
     const editor = new Editor(viewport);
-    editor.setRopeLength(16);
+    editor.setPen(ropePen(16));
     const start = screenToWorld(editor.camera, viewport, { x: 100, y: 300 });
-    const end = screenToWorld(editor.camera, viewport, { x: 300, y: 300 });
     editor.pointerDown({ x: 100, y: 300 }, "primary");
     editor.pointerMove({ x: 300, y: 300 });
     editor.pointerUp();
     const points = worldPointsOfFirstStroke(editor);
-    expect(points).toHaveLength(3); // the press, the brush pulled by the rope, the release
+    expect(points).toHaveLength(2); // the press, the brush pulled by the rope: nothing at the release
     expect(samePoint(points[0] as Point, start)).toBe(true);
-    expect(samePoint(points[2] as Point, end)).toBe(true);
     const pulled = worldToScreen(editor.camera, viewport, points[1] as Point);
     expect(pulled.x).toBeCloseTo(300 - 16, 9); // one rope length behind the pointer
     expect(pulled.y).toBeCloseTo(300, 9);
   });
 
+  it("adds nothing when the stroke ends: what was visible is what is kept, with either rope", () => {
+    for (const pen of [ropePen(32), { ...DEFAULT_PEN, kind: "speed", lag: 50 } as const]) {
+      const editor = new Editor(viewport);
+      editor.setPen(pen);
+      const at = (i: number) => ({ x: 640 + 200 * Math.cos(i / 100), y: 360 + 200 * Math.sin(i / 100) });
+      editor.pointerDown(at(0), "primary", 0);
+      for (let i = 1; i <= 300; i++) editor.pointerMove(at(i), i * 4);
+      const visible = worldPointsOfFirstStroke(editor);
+      editor.pointerUp();
+      const kept = worldPointsOfFirstStroke(editor);
+      expect(kept.length, pen.kind).toBe(visible.length);
+      kept.forEach((p, i) => expect(samePoint(p, visible[i] as Point), pen.kind).toBe(true));
+      const end = worldToScreen(editor.camera, viewport, kept.at(-1) as Point);
+      expect(Math.hypot(end.x - at(300).x, end.y - at(300).y), pen.kind).toBeGreaterThan(10); // the pointer was far ahead
+    }
+  });
+
+  it("leaves a dot for a gesture shorter than the rope", () => {
+    const editor = new Editor(viewport);
+    editor.setPen(ropePen(16));
+    editor.pointerDown({ x: 100, y: 100 }, "primary");
+    editor.pointerMove({ x: 110, y: 100 });
+    editor.pointerUp();
+    expect(editor.stats).toEqual({ strokes: 1, sections: 1, points: 1 });
+  });
+
   it("absorbs a tremor smaller than the rope", () => {
     const editor = new Editor(viewport);
-    editor.setRopeLength(16);
+    editor.setPen(ropePen(16));
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     for (const p of [{ x: 104, y: 97 }, { x: 96, y: 105 }, { x: 110, y: 108 }, { x: 99, y: 90 }]) editor.pointerMove(p);
     expect(editor.stats.points).toBe(1); // nothing but the press
   });
 
-  it("changes the rope for the next stroke only, and refuses an invalid length", () => {
+  it("changes the pen for the next stroke only, and refuses an invalid length or lag", () => {
     const editor = new Editor(viewport);
-    editor.setRopeLength(16);
+    editor.setPen(ropePen(16));
     editor.pointerDown({ x: 100, y: 100 }, "primary");
-    editor.setRopeLength(64); // ignored while drawing
-    expect(editor.ropeLength).toBe(16);
+    editor.setPen(ropePen(64)); // ignored while drawing
+    expect(editor.pen).toEqual(ropePen(16));
     editor.pointerUp();
-    editor.setRopeLength(64);
-    expect(editor.ropeLength).toBe(64);
-    expect(() => editor.setRopeLength(-5)).toThrow(RangeError);
-    expect(() => editor.setRopeLength(Number.NaN)).toThrow(RangeError);
-    expect(editor.ropeLength).toBe(64);
+    editor.setPen(ropePen(64));
+    expect(editor.pen).toEqual(ropePen(64));
+    expect(() => editor.setPen({ ...ropePen(64), length: -5 })).toThrow(RangeError);
+    expect(() => editor.setPen({ ...ropePen(64), length: Number.NaN })).toThrow(RangeError);
+    expect(() => editor.setPen({ ...DEFAULT_PEN, lag: -1 })).toThrow(RangeError);
+    expect(() => editor.setPen({ ...ropePen(0), lag: Infinity })).toThrow(RangeError); // even for a pen that does not use it
+    expect(editor.pen).toEqual(ropePen(64));
   });
 
   it("keeps the end of the stroke on the drawing when the wheel zooms", () => {
     const editor = new Editor(viewport);
-    editor.setRopeLength(40);
+    editor.setPen(ropePen(40));
     editor.pointerDown({ x: 100, y: 300 }, "primary");
     editor.pointerMove({ x: 500, y: 300 }); // the brush is 40 px behind: at x = 460
     const tip = screenToWorld(editor.camera, viewport, { x: 460, y: 300 });
@@ -203,7 +229,7 @@ describe("the rope", () => {
 
   it("keeps the end of the stroke on the drawing when the view moves", () => {
     const editor = new Editor(viewport);
-    editor.setRopeLength(40);
+    editor.setPen(ropePen(40));
     editor.pointerDown({ x: 100, y: 300 }, "primary");
     editor.pointerMove({ x: 500, y: 300 }); // the brush is at x = 460
     const tip = screenToWorld(editor.camera, viewport, { x: 460, y: 300 });
@@ -219,5 +245,45 @@ describe("the rope", () => {
     const last = worldToScreen(editor.camera, viewport, points[points.length - 1] as Point);
     expect(last.x).toBeCloseTo(566, 9);
     expect(last.y).toBeCloseTo(308, 9);
+  });
+});
+
+describe("the rope that follows the speed of the hand", () => {
+  const speedPen: Pen = { ...DEFAULT_PEN, kind: "speed", lag: 50 };
+
+  it("is long when the hand is fast and short when it is slow", () => {
+    const editor = new Editor(viewport);
+    editor.setPen(speedPen);
+    expect(editor.ropeNow).toBeNull();
+    editor.pointerDown({ x: 100, y: 300 }, "primary", 1000);
+    let x = 100;
+    for (let t = 1004; t <= 1200; t += 4) editor.pointerMove({ x: (x += 4), y: 300 }, t); // 1 000 px/s
+    expect(editor.ropeNow).toBeCloseTo(50, 9);
+    const fastEnd = worldToScreen(editor.camera, viewport, worldPointsOfFirstStroke(editor).at(-1) as Point);
+    expect(x - fastEnd.x).toBeCloseTo(50, 9);
+    for (let t = 1204; t <= 1600; t += 4) editor.pointerMove({ x: (x += 0.4), y: 300 }, t); // 100 px/s
+    expect(editor.ropeNow).toBeCloseTo(5, 9);
+    const slowEnd = worldToScreen(editor.camera, viewport, worldPointsOfFirstStroke(editor).at(-1) as Point);
+    expect(x - slowEnd.x).toBeCloseTo(5, 9);
+    editor.pointerUp();
+    expect(editor.ropeNow).toBeNull();
+  });
+
+  it("does not jump when drawing goes on after the view moved", () => {
+    const editor = new Editor(viewport);
+    editor.setPen(speedPen);
+    editor.pointerDown({ x: 100, y: 300 }, "primary", 0);
+    for (let t = 4; t <= 200; t += 4) editor.pointerMove({ x: 100 + t, y: 300 }, t);
+    const length = editor.ropeNow;
+    expect(length).toBeCloseTo(50, 9);
+    editor.pointerDown({ x: 300, y: 300 }, "secondary", 200);
+    for (let t = 204; t <= 700; t += 4) editor.pointerMove({ x: 300, y: 300 - (t - 200) / 4 }, t); // the view moves up
+    editor.pointerUp("secondary");
+    const points = editor.stats.points;
+    editor.pointerMove({ x: 301, y: 176 }, 704); // drawing goes on, slowly
+    expect(editor.ropeNow).toBe(length);
+    expect(editor.stats.points).toBe(points + 1);
+    const end = worldToScreen(editor.camera, viewport, worldPointsOfFirstStroke(editor).at(-1) as Point);
+    expect(Math.hypot(301 - end.x, 176 - end.y)).toBeCloseTo(50, 9); // pulled 1 px, not to the pointer
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buttonChanges, describePen, parseStoredRope, stepRope, toggleRope } from "./controls";
-import { DEFAULT_ROPE_LENGTH, ROPE_LENGTHS } from "./editor";
+import { buttonChanges, describePen, nextPen, parseStoredPen, stepPen } from "./controls";
+import { DEFAULT_LAG, DEFAULT_PEN, DEFAULT_ROPE_LENGTH, LAG_TIMES, type Pen, ROPE_LENGTHS } from "./editor";
 
 describe("buttonChanges", () => {
   it("sees nothing when the buttons did not change", () => {
@@ -37,39 +37,54 @@ describe("buttonChanges", () => {
   });
 });
 
-describe("rope length controls", () => {
-  it("steps through the lengths, and stops at both ends", () => {
-    expect(stepRope(16, 1)).toBe(32);
-    expect(stepRope(16, -1)).toBe(8);
-    expect(stepRope(ROPE_LENGTHS[ROPE_LENGTHS.length - 1] as number, 1)).toBe(ROPE_LENGTHS[ROPE_LENGTHS.length - 1]);
-    expect(stepRope(ROPE_LENGTHS[0], -1)).toBe(ROPE_LENGTHS[0]);
+describe("pen controls", () => {
+  const fixed: Pen = { kind: "fixed", length: 16, lag: 50 };
+  const speed: Pen = { kind: "speed", length: 16, lag: 50 };
+  const raw: Pen = { kind: "raw", length: 16, lag: 50 };
+
+  it("goes from the raw pen to the fixed rope, then to the rope that follows the speed, then back, keeping the settings", () => {
+    const custom: Pen = { kind: "raw", length: 64, lag: 200 };
+    expect(nextPen(custom)).toEqual({ kind: "fixed", length: 64, lag: 200 });
+    expect(nextPen(nextPen(custom))).toEqual({ kind: "speed", length: 64, lag: 200 });
+    expect(nextPen(nextPen(nextPen(custom)))).toEqual(custom);
   });
 
-  it("leaves the raw pen alone, and replaces an unknown length by the default", () => {
-    expect(stepRope(0, 1)).toBe(0);
-    expect(stepRope(0, -1)).toBe(0);
-    expect(stepRope(17, 1)).toBe(DEFAULT_ROPE_LENGTH);
+  it("steps through the rope lengths of the fixed rope, and stops at both ends", () => {
+    expect(stepPen(fixed, 1)).toEqual({ ...fixed, length: 32 });
+    expect(stepPen(fixed, -1)).toEqual({ ...fixed, length: 8 });
+    const longest = ROPE_LENGTHS[ROPE_LENGTHS.length - 1] as number;
+    expect(stepPen({ ...fixed, length: longest }, 1).length).toBe(longest);
+    expect(stepPen({ ...fixed, length: ROPE_LENGTHS[0] }, -1).length).toBe(ROPE_LENGTHS[0]);
+    expect(stepPen({ ...fixed, length: 17 }, 1).length).toBe(DEFAULT_ROPE_LENGTH);
   });
 
-  it("switches between the raw pen and the last smooth one", () => {
-    expect(toggleRope(16, 16)).toBe(0);
-    expect(toggleRope(64, 16)).toBe(0);
-    expect(toggleRope(0, 64)).toBe(64);
+  it("steps through the lags of the rope that follows the speed, and stops at both ends", () => {
+    expect(stepPen(speed, 1)).toEqual({ ...speed, lag: 100 });
+    expect(stepPen(speed, -1)).toEqual({ ...speed, lag: 25 });
+    const longest = LAG_TIMES[LAG_TIMES.length - 1] as number;
+    expect(stepPen({ ...speed, lag: longest }, 1).lag).toBe(longest);
+    expect(stepPen({ ...speed, lag: LAG_TIMES[0] }, -1).lag).toBe(LAG_TIMES[0]);
+    expect(stepPen({ ...speed, lag: 33 }, 1).lag).toBe(DEFAULT_LAG);
   });
 
-  it("reads a stored length, and falls back to the default for anything else", () => {
-    expect(parseStoredRope("32")).toBe(32);
-    expect(parseStoredRope("0")).toBe(0);
-    expect(parseStoredRope(null)).toBe(DEFAULT_ROPE_LENGTH);
-    expect(parseStoredRope("17")).toBe(DEFAULT_ROPE_LENGTH);
-    expect(parseStoredRope("smooth")).toBe(DEFAULT_ROPE_LENGTH);
-    expect(parseStoredRope("")).toBe(DEFAULT_ROPE_LENGTH);
-    expect(parseStoredRope("  ")).toBe(DEFAULT_ROPE_LENGTH);
+  it("leaves the raw pen alone", () => {
+    expect(stepPen(raw, 1)).toEqual(raw);
+    expect(stepPen(raw, -1)).toEqual(raw);
+  });
+
+  it("reads a stored pen, field by field, and falls back to the defaults for anything else", () => {
+    expect(parseStoredPen(JSON.stringify({ kind: "fixed", length: 32, lag: 200 }))).toEqual({ kind: "fixed", length: 32, lag: 200 });
+    expect(parseStoredPen(JSON.stringify({ kind: "raw", length: 17, lag: -1 }))).toEqual({ ...DEFAULT_PEN, kind: "raw" });
+    expect(parseStoredPen(JSON.stringify({ kind: "wobbly", length: 64 }))).toEqual({ ...DEFAULT_PEN, length: 64 });
+    expect(parseStoredPen(JSON.stringify({ kind: "fixed", length: "32" })).length).toBe(DEFAULT_PEN.length);
+    for (const stored of [null, "", "  ", "16", "smooth", "[1, 2]", "null", "{"]) expect(parseStoredPen(stored)).toEqual(DEFAULT_PEN);
   });
 
   it("describes the pen", () => {
-    expect(describePen(0)).toContain("raw");
-    expect(describePen(16)).toContain("smooth");
-    expect(describePen(16)).toContain("16 px");
+    expect(describePen(raw)).toContain("raw");
+    expect(describePen(fixed)).toContain("rope of 16 px");
+    expect(describePen(speed)).toContain("50 ms of lag");
+    expect(describePen(speed)).not.toContain("now");
+    expect(describePen(speed, 23.4)).toContain("now 23 px");
   });
 });
