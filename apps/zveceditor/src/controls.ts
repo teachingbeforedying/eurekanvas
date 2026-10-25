@@ -80,6 +80,15 @@ export function parseStoredPen(stored: string | null): Pen {
   };
 }
 
+export const DRAWING_FILE_EXTENSION = ".zvec.json";
+
+/** The name of a saved drawing, with the local date and time: `drawing-2026-10-25-1530.zvec.json`. */
+export function drawingFileName(date: Date): string {
+  const two = (n: number): string => String(n).padStart(2, "0");
+  const day = `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
+  return `drawing-${day}-${two(date.getHours())}${two(date.getMinutes())}${DRAWING_FILE_EXTENSION}`;
+}
+
 /** What the box at the top left says about the pen. `ropeNow` is the length of the rope while a stroke is drawn. */
 export function describePen(pen: Pen, ropeNow: number | null = null): string {
   switch (pen.kind) {

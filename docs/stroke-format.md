@@ -2,7 +2,7 @@
 
 A stroke drawn while zooming can go hundreds of zoom levels deep. Positions that deep cannot be written as ordinary floating-point coordinates, so a stroke is stored as a sequence of **sections**: each section has an **exact anchor** and **small float offsets** from that anchor, together with the **thickness** of the stroke at each point.
 
-This document specifies the JSON form. The reference implementation is `strokeToJSON` / `strokeFromJSON` in [`packages/engine/src/stroke.ts`](../packages/engine/src/stroke.ts). To read the anchors, a reader needs **arbitrary-precision integers** (`BigInt` in JavaScript, `int` in Python, `BigInteger` in Java, and so on). The offsets and widths are ordinary IEEE 754 doubles.
+This document specifies the JSON form. A whole drawing (several strokes and a view) is specified in [drawing-format.md](./drawing-format.md). The reference implementation is `strokeToJSON` / `strokeFromJSON` in [`packages/engine/src/stroke.ts`](../packages/engine/src/stroke.ts). To read the anchors, a reader needs **arbitrary-precision integers** (`BigInt` in JavaScript, `int` in Python, `BigInteger` in Java, and so on). The offsets and widths are ordinary IEEE 754 doubles.
 
 Version 1 has not been published yet and has no known reader, so it may still change before the first release.
 

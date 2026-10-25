@@ -1,7 +1,8 @@
-import { type ScreenPoint, type Viewport, log2Scale } from "@eurekanvas/engine";
+import { type Drawing, type ScreenPoint, type Viewport, drawingFromJSON, drawingToJSON, log2Scale } from "@eurekanvas/engine";
 import { FabricRenderer } from "@eurekanvas/renderer-fabric";
-import { buttonChanges, describePen, nextPen, parseStoredPen, stepPen } from "./controls";
+import { buttonChanges, describePen, drawingFileName, nextPen, parseStoredPen, stepPen } from "./controls";
 import { Editor, type Pen } from "./editor";
+import { keepUnreadable, loadAutosave, saveAutosave } from "./storage";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const hud = document.getElementById("hud");
@@ -33,6 +34,126 @@ function choosePen(pen: Pen): void {
 }
 editor.setPen(storedPen());
 
+// What the box at the top left says about the last save or open.
+let status = "";
+function setStatus(text: string): void {
+  status = text;
+  invalidate();
+}
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function drawingText(): string {
+  return JSON.stringify(drawingToJSON({ strokes: editor.strokes, view: editor.camera }));
+}
+
+// The automatic save, in the browser: the drawing and its view come back when the page opens again. Nothing is
+// saved before the saved drawing has been read, or the empty page would overwrite it.
+const AUTOSAVE_DELAY = 500; // milliseconds after the last change
+let autosave: "loading" | "on" | "off" = "loading";
+let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+let lastSaved: string | null = null;
+
+/** The strokes or the view changed: save them once the changes stop for a moment. */
+function changed(): void {
+  if (autosave !== "on") return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(saveNow, AUTOSAVE_DELAY);
+}
+
+function saveNow(): void {
+  clearTimeout(autosaveTimer);
+  if (autosave !== "on") return;
+  const text = drawingText();
+  if (text === lastSaved) return;
+  saveAutosave(text).then(
+    () => void (lastSaved = text),
+    (error: unknown) => {
+      autosave = "off";
+      setStatus(`automatic save stopped: ${reason(error)}`);
+    },
+  );
+}
+
+async function restoreAutosave(): Promise<void> {
+  let text: string | null;
+  try {
+    text = await loadAutosave();
+  } catch (error) {
+    autosave = "off"; // no IndexedDB: the page works without the automatic save
+    setStatus(`no automatic save in this browser: ${reason(error)}`);
+    return;
+  }
+  if (text !== null) {
+    try {
+      editor.restore(drawingFromJSON(JSON.parse(text)));
+      lastSaved = text;
+    } catch (error) {
+      try {
+        const key = await keepUnreadable(text, new Date());
+        setStatus(`the saved drawing could not be read (${reason(error)}): it is kept aside as "${key}"`);
+      } catch {
+        autosave = "off"; // never overwrite a drawing that could not be kept aside
+        setStatus(`the saved drawing could not be read (${reason(error)}): automatic save stopped, so as not to overwrite it`);
+        return;
+      }
+    }
+  }
+  autosave = "on";
+  changed(); // strokes drawn while the saved drawing was loading
+  invalidate();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") saveNow();
+});
+
+// Files: Ctrl+S downloads a copy of the drawing, Ctrl+O adds the strokes of a file to the drawing.
+function saveFile(): void {
+  const name = drawingFileName(new Date());
+  const url = URL.createObjectURL(new Blob([drawingText()], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.append(link); // older Firefox only follows a link that is in the page
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000); // once the download has surely started
+  setStatus(`saved ${name} (${editor.strokes.length} strokes)`);
+}
+
+function openText(name: string, text: string): void {
+  let drawing: Drawing;
+  try {
+    drawing = drawingFromJSON(JSON.parse(text));
+  } catch (error) {
+    setStatus(`could not open ${name}: ${reason(error)}`);
+    return;
+  }
+  if (!editor.addDrawing(drawing)) {
+    setStatus(`could not open ${name} while drawing: release the button, then open it again`);
+    return;
+  }
+  setStatus(`opened ${name}: ${drawing.strokes.length} strokes added (Ctrl+Z removes them)`);
+  changed();
+}
+
+const fileInput = document.createElement("input");
+fileInput.type = "file";
+fileInput.accept = ".json,application/json";
+fileInput.hidden = true;
+document.body.append(fileInput);
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files?.[0];
+  fileInput.value = ""; // so that the same file can be opened again
+  if (!file) return;
+  file.text().then(
+    (text) => openText(file.name, text),
+    (error: unknown) => setStatus(`could not read ${file.name}: ${reason(error)}`),
+  );
+});
+
 // Frames are drawn at most once per animation frame, and only when something changed.
 let frameRequested = false;
 function invalidate(): void {
@@ -56,6 +177,9 @@ function updateHud(): void {
     `draw: left button    zoom: wheel (also while drawing)`,
     `move the view: right or middle button (also while drawing), or Space + left button`,
     `undo: Ctrl+Z    reset the view: 0`,
+    `save a file: Ctrl+S    open a file (adds to the drawing): Ctrl+O    clear: K (Ctrl+Z brings it back)`,
+    `automatic save in this browser: ${autosave}`,
+    ...(status === "" ? [] : [status]),
   ].join("\n");
 }
 
@@ -96,12 +220,14 @@ canvas.addEventListener("pointermove", (event) => {
     syncButtons(each.buttons, p, each.timeStamp);
     editor.pointerMove(p, each.timeStamp);
   }
+  if (editor.isMovingView) changed();
   invalidate();
 });
 
 function release(event: PointerEvent): void {
   if (canvas!.hasPointerCapture(event.pointerId)) canvas!.releasePointerCapture(event.pointerId);
   syncButtons(event.type === "pointercancel" ? 0 : event.buttons, position(event), event.timeStamp);
+  changed();
   invalidate();
 }
 canvas.addEventListener("pointerup", release);
@@ -116,6 +242,7 @@ canvas.addEventListener(
     // a notch is about 100 pixels; Firefox may report lines (about 3 per notch) or pages
     const unit = event.deltaMode === 1 ? 100 / 3 : event.deltaMode === 2 ? 800 : 1;
     editor.wheel(position(event), event.deltaY * unit);
+    changed();
     invalidate();
   },
   { passive: false },
@@ -129,9 +256,23 @@ window.addEventListener("keydown", (event) => {
   } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
     editor.undo();
     event.preventDefault();
+    changed();
     invalidate();
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault(); // instead of saving the page
+    saveFile();
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+    event.preventDefault(); // instead of opening a file in the browser
+    fileInput.click();
+  } else if (plain && event.key.toLowerCase() === "k") {
+    const count = editor.strokes.length;
+    if (editor.clear() && count > 0) {
+      setStatus(`cleared ${count} strokes (Ctrl+Z brings them back)`);
+      changed();
+    }
   } else if (plain && event.key === "0") {
     editor.resetView();
+    changed();
     invalidate();
   } else if (plain && event.key.toLowerCase() === "s") {
     choosePen(nextPen(editor.pen));
@@ -153,7 +294,9 @@ window.addEventListener("resize", () => {
   invalidate();
 });
 
-// For tests in the browser: the editor can be driven from the console (`window.zveceditor.editor`).
-(window as unknown as { zveceditor: unknown }).zveceditor = { editor, renderer, invalidate };
+// For tests in the browser: the editor can be driven from the console (`window.zveceditor.editor`), and a
+// file opened without the file picker (`window.zveceditor.openText(name, text)`).
+(window as unknown as { zveceditor: unknown }).zveceditor = { editor, renderer, invalidate, openText };
 
 invalidate();
+void restoreAutosave();

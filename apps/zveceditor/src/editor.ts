@@ -1,5 +1,6 @@
 import {
   type Camera,
+  type Drawing,
   type Scene,
   type ScreenPoint,
   type Stroke,
@@ -90,7 +91,9 @@ export interface EditorStats {
 export class Editor {
   private _camera: Camera = createCamera();
   private _viewport: Viewport;
-  private readonly finished: Stroke[] = [];
+  private finished: readonly Stroke[] = [];
+  /** The finished strokes before each action (a stroke, an added drawing, a clear), for `undo`. */
+  private readonly history: (readonly Stroke[])[] = [];
   private recorder: StrokeRecorder | null = null;
   private rope = new Rope(0);
   private _pen: Pen = { ...DEFAULT_PEN, kind: "raw" };
@@ -112,6 +115,11 @@ export class Editor {
 
   get viewport(): Viewport {
     return this._viewport;
+  }
+
+  /** The finished strokes, in drawing order: what is saved. */
+  get strokes(): readonly Stroke[] {
+    return this.finished;
   }
 
   /** What to draw: the finished strokes, then the one being drawn. */
@@ -206,7 +214,7 @@ export class Editor {
       return;
     }
     if (this.recorder) {
-      this.finished.push(this.recorder.stroke);
+      this.commit([...this.finished, this.recorder.stroke]);
       this.recorder = null;
     }
   }
@@ -231,10 +239,44 @@ export class Editor {
     if (this.recorder) this.rope.shifted(dx, dy);
   }
 
-  /** Removes the last finished stroke. Does nothing while drawing. */
+  /**
+   * Puts back a saved drawing when the page opens, with nothing to undo. Strokes drawn before it came back are
+   * kept, after its own: nothing is lost if it comes late. Its view is shown, unless a stroke is being drawn.
+   */
+  restore(drawing: Drawing): void {
+    this.finished = [...drawing.strokes, ...this.finished];
+    this.history.length = 0;
+    if (!this.isDrawing) this._camera = drawing.view;
+  }
+
+  /**
+   * Adds the strokes of a drawing where they were drawn, and shows its view. `undo` removes them all at once
+   * (and leaves the view). Returns `false`, doing nothing, while a stroke is being drawn.
+   */
+  addDrawing(drawing: Drawing): boolean {
+    if (this.isDrawing) return false;
+    if (drawing.strokes.length > 0) this.commit([...this.finished, ...drawing.strokes]);
+    this._camera = drawing.view;
+    return true;
+  }
+
+  /** Removes every stroke; `undo` brings them all back. Returns `false`, doing nothing, while a stroke is being drawn. */
+  clear(): boolean {
+    if (this.isDrawing) return false;
+    if (this.finished.length > 0) this.commit([]);
+    return true;
+  }
+
+  /** Undoes the last action: a stroke, an added drawing or a clear. The view stays where it is. Does nothing while drawing. */
   undo(): void {
     if (this.isDrawing) return;
-    this.finished.pop();
+    const previous = this.history.pop();
+    if (previous) this.finished = previous;
+  }
+
+  private commit(strokes: readonly Stroke[]): void {
+    this.history.push(this.finished);
+    this.finished = strokes;
   }
 
   /** Goes back to the starting view: the world origin at the middle of the screen, at the starting zoom. */

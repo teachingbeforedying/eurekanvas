@@ -35,6 +35,14 @@ export {
   strokeToJSON,
   strokeWorldPoints,
 } from "./stroke";
+export {
+  type Drawing,
+  type DrawingJSON,
+  DRAWING_FORMAT,
+  DRAWING_FORMAT_VERSION,
+  drawingFromJSON,
+  drawingToJSON,
+} from "./drawing";
 export { type OutlinePoint, type PathCommand, strokeOutline } from "./outline";
 export {
   type DrawableSection,

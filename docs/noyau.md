@@ -252,6 +252,46 @@ Dans le navigateur (événements synthétiques minutés, virage de 10 px de rayo
 
 **Pas vérifié** : le stylet et le tactile ; Firefox et Safari ; un zoom en plein tracé avec la corde-vitesse dans le navigateur (tests unitaires seulement).
 
+## Enregistrer et ouvrir un dessin (2026-10-25)
+
+Demande de Sébastien : ne plus perdre un dessin au rechargement, et pouvoir le garder dans un fichier. L'assemblage de plusieurs fichiers vient après la sélection (voir « Suite »).
+
+**Le format** `eurekanvas/drawing`, version 1 ([drawing-format.md](./drawing-format.md), en anglais pour des lecteurs tiers) : la vue (centre exact, `zLevel`, `factor`) et la liste des traits, chacun un document `eurekanvas/stroke` complet. Code : `packages/engine/src/drawing.ts`. L'aller-retour par du vrai texte JSON est exact (ancrages et centre égaux en dyadiques) pour un trait de 600 niveaux.
+
+**L'enregistrement automatique** se fait dans IndexedDB plutôt que dans `localStorage`, limité à environ 5 Mo (un seul trait de 1 375 niveaux pèse 1,3 Mo). Il a lieu 500 ms après la dernière modification (trait, ajout, effacement, annulation, molette, déplacement, `0`) et quand la page passe en arrière-plan. Les traits et la vue reviennent à l'ouverture de la page. Pour ne rien perdre :
+- rien n'est enregistré avant d'avoir relu le dessin gardé, sinon la page vide du démarrage l'écraserait ;
+- un trait tracé pendant ce chargement est gardé, après les traits relus ;
+- un dessin gardé illisible (version inconnue, texte abîmé) est mis de côté sous `unreadable-<date>`, jamais écrasé ; s'il ne peut même pas être mis de côté, l'enregistrement automatique s'arrête ;
+- sans IndexedDB, la page marche sans enregistrement automatique, et le panneau le dit.
+
+**Commandes** (choix de Sébastien) :
+- `Ctrl+S` télécharge une copie, `drawing-AAAA-MM-JJ-HHMM.zvec.json` à l'heure locale. Le trait en cours n'en fait pas partie.
+- `Ctrl+O` **ajoute** les traits d'un fichier là où ils ont été dessinés, et montre la vue du fichier.
+- `K` efface tout, comme dans l'ancienne version.
+- `Ctrl+Z` annule la dernière action : un trait, un ajout de fichier (tous ses traits d'un coup) ou un effacement (tout revient). Il ne ramène pas la vue.
+
+L'historique garde l'état d'avant chaque action, ce qui ne copie que des références.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser) :
+- un dessin de 2 traits, dont un tracé en zoomant jusqu'au niveau 19, revient à l'identique après un rechargement (21 sections, 181 points, même centre exact) ;
+- les vraies touches `Ctrl+S` (fichier `drawing-2026-10-25-1700.zvec.json`, contenu relu sans erreur), `0`, `K` et `Ctrl+Z` ;
+- l'ouverture du fichier enregistré ajoute ses traits et va au niveau 19, et `Ctrl+Z` retire tout l'ajout en laissant la vue ;
+- deux fichiers invalides (un `zLevel` de 1,5, un texte qui n'est pas du JSON) sont refusés sans rien changer ;
+- un dessin gardé de version 99 est mis de côté, et la page démarre vide ;
+- aucune erreur dans la console.
+
+**Contrôle par mutation** : 6 modifications volontaires (un ajout annulé trait par trait, un ajout qui ne change pas la vue, une lecture qui accepte un `zLevel` non entier, une reprise qui remplace les traits tracés pendant le chargement, un effacement à vide qu'on peut annuler, une reprise qui garde l'historique) ; chacune fait échouer au moins un test.
+
+**Essayé à la main par Sébastien** dans Edge et dans Firefox : ça marche.
+
+**Pas vérifié** :
+- l'affichage des messages dans le panneau par mes outils, parce que le panneau Browser était caché et ne dessinait pas d'image ;
+- la garde « rien avant le chargement » par une mutation : la course est trop courte pour la provoquer.
+
+**Limites** : avec deux onglets ouverts, le dernier qui enregistre l'emporte. Pas de glisser-déposer de fichier, pas de compression.
+
+**Suite** : la sélection, avec deux gestes de l'ancienne version. Avec le zoomScroll, la sélection suit la vue quand on zoome. Avec le craneScroll (`1` + molette), la vue reste fixe et la sélection change d'échelle. Ensuite, `Ctrl+O` sélectionnera ce qu'il ajoute pour qu'on le place.
+
 ## Critères de réussite du tronçon
 
 - `packages/engine` : tests Vitest qui passent. En particulier :

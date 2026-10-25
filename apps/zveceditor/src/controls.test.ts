@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buttonChanges, describePen, nextPen, parseStoredPen, stepPen } from "./controls";
+import { buttonChanges, describePen, drawingFileName, nextPen, parseStoredPen, stepPen } from "./controls";
 import { DEFAULT_LAG, DEFAULT_PEN, DEFAULT_ROPE_LENGTH, LAG_TIMES, type Pen, ROPE_LENGTHS } from "./editor";
 
 describe("buttonChanges", () => {
@@ -86,5 +86,12 @@ describe("pen controls", () => {
     expect(describePen(speed)).toContain("50 ms of lag");
     expect(describePen(speed)).not.toContain("now");
     expect(describePen(speed, 23.4)).toContain("now 23 px");
+  });
+});
+
+describe("drawingFileName", () => {
+  it("names a saved drawing with the local date and time, with leading zeros", () => {
+    expect(drawingFileName(new Date(2026, 9, 25, 15, 30))).toBe("drawing-2026-10-25-1530.zvec.json");
+    expect(drawingFileName(new Date(2027, 0, 5, 7, 4))).toBe("drawing-2027-01-05-0704.zvec.json");
   });
 });
