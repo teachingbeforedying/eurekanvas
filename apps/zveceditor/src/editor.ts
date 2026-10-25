@@ -1,12 +1,14 @@
 import {
   type Camera,
   type Drawing,
+  type Item,
   type Scene,
   type ScreenPoint,
   type Stroke,
   type Viewport,
   StrokeRecorder,
   createCamera,
+  itemStrokes,
   pan,
   zoomAt,
 } from "@eurekanvas/engine";
@@ -74,9 +76,11 @@ export interface EditorStats {
 
 /**
  * What the zveceditor tool does, without any DOM: it is given pointer and wheel events and keeps the
- * camera and the strokes. The page forwards browser events to it and draws its `scene`.
+ * camera and the objects of the drawing. The page forwards browser events to it and draws its `scene`.
  *
- * - primary button: draw (with Space held: move the view);
+ * - primary button, pressed while the drawing key (`²`) is held: draw. Every stroke drawn while the key stays
+ *   held, button released or not in between, makes one object (a group when there are several). With Space
+ *   held, the primary button moves the view; with neither key, it will select (not done yet);
  * - middle or secondary button: move the view. It can be pressed while the primary button is down: the
  *   stroke is paused, the view follows the pointer, and drawing goes on from the same place of the
  *   stroke when the button is released;
@@ -91,10 +95,18 @@ export interface EditorStats {
 export class Editor {
   private _camera: Camera = createCamera();
   private _viewport: Viewport;
-  private finished: readonly Stroke[] = [];
-  /** The finished strokes before each action (a stroke, an added drawing, a clear), for `undo`. */
-  private readonly history: (readonly Stroke[])[] = [];
+  private finished: readonly Item[] = [];
+  /** The objects before each action (a stroke, an added drawing, a clear...), for `undo`. */
+  private readonly history: (readonly Item[])[] = [];
+  /** The strokes of `finished`, flattened for the scene, remembered for the `finished` they come from. */
+  private flat: { readonly from: readonly Item[]; readonly strokes: readonly Stroke[] } = { from: [], strokes: [] };
   private recorder: StrokeRecorder | null = null;
+  private drawKeyHeld = false;
+  /**
+   * While the drawing key is held (and until the stroke it was held for ends): how many strokes were drawn,
+   * each one its own action, still in the drawing. They become one object when the hold ends.
+   */
+  private hold: { count: number } | null = null;
   private rope = new Rope(0);
   private _pen: Pen = { ...DEFAULT_PEN, kind: "raw" };
   /** How many of the secondary and middle buttons are down. */
@@ -117,18 +129,19 @@ export class Editor {
     return this._viewport;
   }
 
-  /** The finished strokes, in drawing order: what is saved. */
-  get strokes(): readonly Stroke[] {
+  /** The objects of the drawing, in drawing order: what is saved. */
+  get items(): readonly Item[] {
     return this.finished;
   }
 
-  /** What to draw: the finished strokes, then the one being drawn. */
+  /** What to draw: the strokes of the objects, then the one being drawn. */
   get scene(): Scene {
+    if (this.flat.from !== this.finished) this.flat = { from: this.finished, strokes: this.finished.flatMap(itemStrokes) };
     const current = this.recorder?.stroke;
     return {
       camera: this._camera,
       viewport: this._viewport,
-      strokes: current === undefined ? this.finished : [...this.finished, current],
+      strokes: current === undefined ? this.flat.strokes : [...this.flat.strokes, current],
     };
   }
 
@@ -177,6 +190,7 @@ export class Editor {
         this.spacePanning = true;
         return;
       }
+      if (!this.drawKeyHeld) return; // the drawing key must be held before the press
       this.recorder = new StrokeRecorder();
       this.rope = ropeFor(this._pen);
       this.recorder.addScreenPoint(this._camera, this._viewport, this.rope.start(p, time), STROKE_WIDTH_PIXELS);
@@ -216,7 +230,38 @@ export class Editor {
     if (this.recorder) {
       this.commit([...this.finished, this.recorder.stroke]);
       this.recorder = null;
+      if (this.hold) this.hold.count += 1;
+      if (!this.drawKeyHeld) this.endHold(); // the key was released during the stroke
     }
+  }
+
+  /**
+   * The drawing key (`²`) was pressed or released. Releasing it ends the hold: the strokes drawn during it become
+   * one object, unless a stroke is still being drawn, in which case the hold ends with that stroke.
+   */
+  setDrawKeyHeld(held: boolean): void {
+    this.drawKeyHeld = held;
+    if (held) this.hold ??= { count: 0 };
+    else if (!this.isDrawing) this.endHold();
+  }
+
+  /** Makes one object of the strokes of the hold, with one action to undo instead of one per stroke. */
+  private endHold(): void {
+    const count = this.hold?.count ?? 0;
+    this.hold = null;
+    if (count < 2) return; // nothing to group: no stroke, or a single one that stays a stroke
+    const before = this.history[this.history.length - count] as readonly Item[];
+    const group: Item = { items: this.finished.slice(-count) };
+    this.history.length -= count;
+    this.history.push(before);
+    this.finished = [...this.finished.slice(0, -count), group];
+  }
+
+  /** Another action comes in the middle of a hold: the strokes drawn so far make their object, and a new hold begins. */
+  private interruptHold(): void {
+    if (this.hold === null) return;
+    this.endHold();
+    if (this.drawKeyHeld) this.hold = { count: 0 };
   }
 
   /** Zooms around `p`, whatever the mode. */
@@ -240,43 +285,52 @@ export class Editor {
   }
 
   /**
-   * Puts back a saved drawing when the page opens, with nothing to undo. Strokes drawn before it came back are
+   * Puts back a saved drawing when the page opens, with nothing to undo. Objects drawn before it came back are
    * kept, after its own: nothing is lost if it comes late. Its view is shown, unless a stroke is being drawn.
    */
   restore(drawing: Drawing): void {
-    this.finished = [...drawing.strokes, ...this.finished];
+    this.interruptHold();
+    this.finished = [...drawing.items, ...this.finished];
     this.history.length = 0;
     if (!this.isDrawing) this._camera = drawing.view;
   }
 
   /**
-   * Adds the strokes of a drawing where they were drawn, and shows its view. `undo` removes them all at once
+   * Adds the objects of a drawing where they were drawn, and shows its view. `undo` removes them all at once
    * (and leaves the view). Returns `false`, doing nothing, while a stroke is being drawn.
    */
   addDrawing(drawing: Drawing): boolean {
     if (this.isDrawing) return false;
-    if (drawing.strokes.length > 0) this.commit([...this.finished, ...drawing.strokes]);
+    this.interruptHold();
+    if (drawing.items.length > 0) this.commit([...this.finished, ...drawing.items]);
     this._camera = drawing.view;
     return true;
   }
 
-  /** Removes every stroke; `undo` brings them all back. Returns `false`, doing nothing, while a stroke is being drawn. */
+  /** Removes every object; `undo` brings them all back. Returns `false`, doing nothing, while a stroke is being drawn. */
   clear(): boolean {
     if (this.isDrawing) return false;
+    this.interruptHold();
     if (this.finished.length > 0) this.commit([]);
     return true;
   }
 
-  /** Undoes the last action: a stroke, an added drawing or a clear. The view stays where it is. Does nothing while drawing. */
+  /**
+   * Undoes the last action: a stroke, an added drawing or a clear. While the drawing key is held, that is the
+   * last stroke; afterwards, the whole object drawn during the hold. The view stays where it is. Does nothing
+   * while drawing.
+   */
   undo(): void {
     if (this.isDrawing) return;
     const previous = this.history.pop();
-    if (previous) this.finished = previous;
+    if (previous === undefined) return;
+    this.finished = previous;
+    if (this.hold && this.hold.count > 0) this.hold.count -= 1;
   }
 
-  private commit(strokes: readonly Stroke[]): void {
+  private commit(items: readonly Item[]): void {
     this.history.push(this.finished);
-    this.finished = strokes;
+    this.finished = items;
   }
 
   /** Goes back to the starting view: the world origin at the middle of the screen, at the starting zoom. */

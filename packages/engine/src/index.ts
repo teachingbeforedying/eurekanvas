@@ -38,10 +38,15 @@ export {
 export {
   type Drawing,
   type DrawingJSON,
+  type Group,
+  type Item,
+  type ItemJSON,
   DRAWING_FORMAT,
   DRAWING_FORMAT_VERSION,
   drawingFromJSON,
   drawingToJSON,
+  isGroup,
+  itemStrokes,
 } from "./drawing";
 export { type OutlinePoint, type PathCommand, strokeOutline } from "./outline";
 export {

@@ -6,7 +6,8 @@ import { keepUnreadable, loadAutosave, saveAutosave } from "./storage";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const hud = document.getElementById("hud");
-if (!canvas || !hud) throw new Error("the page is missing #canvas or #hud");
+const message = document.getElementById("message");
+if (!canvas || !hud || !message) throw new Error("the page is missing #canvas, #hud or #message");
 
 function windowViewport(): Viewport {
   return { width: Math.max(1, window.innerWidth), height: Math.max(1, window.innerHeight) };
@@ -34,18 +35,48 @@ function choosePen(pen: Pen): void {
 }
 editor.setPen(storedPen());
 
-// What the box at the top left says about the last save or open.
-let status = "";
-function setStatus(text: string): void {
-  status = text;
-  invalidate();
+// The page shows nothing but the drawing. A message appears at the bottom for a moment; a warning that
+// something may be lost stays until it is clicked or Escape is pressed.
+const MESSAGE_DURATION = 3000; // milliseconds
+let messageTimer: ReturnType<typeof setTimeout> | undefined;
+function showMessage(text: string, kind: "info" | "warning" = "info"): void {
+  clearTimeout(messageTimer);
+  message!.textContent = text;
+  message!.className = kind;
+  message!.hidden = false;
+  if (kind === "info") messageTimer = setTimeout(hideMessage, MESSAGE_DURATION);
 }
+function hideMessage(): void {
+  clearTimeout(messageTimer);
+  message!.hidden = true;
+}
+message.addEventListener("click", hideMessage);
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+function objects(count: number): string {
+  return count === 1 ? "1 object" : `${count} objects`;
+}
+
+// The panel at the top left (zoom, statistics, pen, help) is hidden unless H shows it; the choice is remembered.
+const PANEL_STORAGE_KEY = "zveceditor.panel";
+function showPanel(shown: boolean): void {
+  hud!.hidden = !shown;
+  try {
+    localStorage.setItem(PANEL_STORAGE_KEY, shown ? "shown" : "hidden");
+  } catch {
+    // not remembered, that is all
+  }
+  invalidate();
+}
+try {
+  hud.hidden = localStorage.getItem(PANEL_STORAGE_KEY) !== "shown";
+} catch {
+  hud.hidden = true;
+}
 
 function drawingText(): string {
-  return JSON.stringify(drawingToJSON({ strokes: editor.strokes, view: editor.camera }));
+  return JSON.stringify(drawingToJSON({ items: editor.items, view: editor.camera }));
 }
 
 // The automatic save, in the browser: the drawing and its view come back when the page opens again. Nothing is
@@ -71,7 +102,7 @@ function saveNow(): void {
     () => void (lastSaved = text),
     (error: unknown) => {
       autosave = "off";
-      setStatus(`automatic save stopped: ${reason(error)}`);
+      showMessage(`automatic save stopped: ${reason(error)}. Save a file with Ctrl+S.`, "warning");
     },
   );
 }
@@ -82,7 +113,7 @@ async function restoreAutosave(): Promise<void> {
     text = await loadAutosave();
   } catch (error) {
     autosave = "off"; // no IndexedDB: the page works without the automatic save
-    setStatus(`no automatic save in this browser: ${reason(error)}`);
+    showMessage(`no automatic save in this browser (${reason(error)}): save a file with Ctrl+S.`, "warning");
     return;
   }
   if (text !== null) {
@@ -92,10 +123,10 @@ async function restoreAutosave(): Promise<void> {
     } catch (error) {
       try {
         const key = await keepUnreadable(text, new Date());
-        setStatus(`the saved drawing could not be read (${reason(error)}): it is kept aside as "${key}"`);
+        showMessage(`the saved drawing could not be read (${reason(error)}): it is kept aside as "${key}".`, "warning");
       } catch {
         autosave = "off"; // never overwrite a drawing that could not be kept aside
-        setStatus(`the saved drawing could not be read (${reason(error)}): automatic save stopped, so as not to overwrite it`);
+        showMessage(`the saved drawing could not be read (${reason(error)}): automatic save stopped, so as not to overwrite it.`, "warning");
         return;
       }
     }
@@ -120,7 +151,7 @@ function saveFile(): void {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000); // once the download has surely started
-  setStatus(`saved ${name} (${editor.strokes.length} strokes)`);
+  showMessage(`saved ${name} (${objects(editor.items.length)})`);
 }
 
 function openText(name: string, text: string): void {
@@ -128,15 +159,16 @@ function openText(name: string, text: string): void {
   try {
     drawing = drawingFromJSON(JSON.parse(text));
   } catch (error) {
-    setStatus(`could not open ${name}: ${reason(error)}`);
+    showMessage(`could not open ${name}: ${reason(error)}`);
     return;
   }
   if (!editor.addDrawing(drawing)) {
-    setStatus(`could not open ${name} while drawing: release the button, then open it again`);
+    showMessage(`could not open ${name} while drawing: release the button, then open it again`);
     return;
   }
-  setStatus(`opened ${name}: ${drawing.strokes.length} strokes added (Ctrl+Z removes them)`);
+  showMessage(`opened ${name}: ${objects(drawing.items.length)} added (Ctrl+Z removes them)`);
   changed();
+  invalidate();
 }
 
 const fileInput = document.createElement("input");
@@ -150,7 +182,7 @@ fileInput.addEventListener("change", () => {
   if (!file) return;
   file.text().then(
     (text) => openText(file.name, text),
-    (error: unknown) => setStatus(`could not read ${file.name}: ${reason(error)}`),
+    (error: unknown) => showMessage(`could not read ${file.name}: ${reason(error)}`),
   );
 });
 
@@ -162,7 +194,7 @@ function invalidate(): void {
   requestAnimationFrame(() => {
     frameRequested = false;
     renderer.render(editor.scene);
-    updateHud();
+    if (!hud!.hidden) updateHud();
   });
 }
 
@@ -171,15 +203,14 @@ function updateHud(): void {
   const stats = editor.stats;
   hud!.textContent = [
     `zoom 2^${log2Scale(camera).toFixed(2)}   (level ${camera.zLevel}, factor ${camera.factor.toFixed(3)})`,
-    `strokes ${stats.strokes} · sections ${stats.sections} · points ${stats.points} · drawn sections ${renderer.drawnSections}`,
+    `objects ${editor.items.length} · strokes ${stats.strokes} · sections ${stats.sections} · points ${stats.points} · drawn sections ${renderer.drawnSections}`,
     describePen(editor.pen, editor.ropeNow),
-    ``,
-    `draw: left button    zoom: wheel (also while drawing)`,
-    `move the view: right or middle button (also while drawing), or Space + left button`,
-    `undo: Ctrl+Z    reset the view: 0`,
-    `save a file: Ctrl+S    open a file (adds to the drawing): Ctrl+O    clear: K (Ctrl+Z brings it back)`,
     `automatic save in this browser: ${autosave}`,
-    ...(status === "" ? [] : [status]),
+    ``,
+    `draw: hold ² (the key left of 1), then the left button; the strokes drawn while ² stays held make one object`,
+    `zoom: wheel (also while drawing)    move the view: right or middle button, or Space + left button`,
+    `undo: Ctrl+Z (while ² is held: the last stroke)    reset the view: 0    clear: K (Ctrl+Z brings it back)`,
+    `save a file: Ctrl+S    open a file (adds to the drawing): Ctrl+O    show or hide this panel: H`,
   ].join("\n");
 }
 
@@ -250,7 +281,13 @@ canvas.addEventListener(
 
 window.addEventListener("keydown", (event) => {
   const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
-  if (event.code === "Space") {
+  if (event.code === "Backquote") {
+    // the drawing key, read by its place (² on a French keyboard, ` on an English one)
+    event.preventDefault();
+    if (!event.repeat) editor.setDrawKeyHeld(true);
+  } else if (event.key === "Escape") {
+    hideMessage();
+  } else if (event.code === "Space") {
     editor.setSpaceHeld(true);
     event.preventDefault();
   } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
@@ -265,11 +302,14 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault(); // instead of opening a file in the browser
     fileInput.click();
   } else if (plain && event.key.toLowerCase() === "k") {
-    const count = editor.strokes.length;
+    const count = editor.items.length;
     if (editor.clear() && count > 0) {
-      setStatus(`cleared ${count} strokes (Ctrl+Z brings them back)`);
+      showMessage(`cleared ${objects(count)} (Ctrl+Z brings them back)`);
       changed();
+      invalidate();
     }
+  } else if (plain && event.key.toLowerCase() === "h") {
+    showPanel(hud.hidden !== false); // `hidden` may also be "until-found"
   } else if (plain && event.key === "0") {
     editor.resetView();
     changed();
@@ -286,6 +326,17 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keyup", (event) => {
   if (event.code === "Space") editor.setSpaceHeld(false);
+  if (event.code === "Backquote") {
+    editor.setDrawKeyHeld(false); // the strokes of the hold become one object
+    changed();
+  }
+});
+
+// A key released while the page does not have the focus sends no `keyup`: losing the focus releases them.
+window.addEventListener("blur", () => {
+  editor.setSpaceHeld(false);
+  editor.setDrawKeyHeld(false);
+  changed();
 });
 
 window.addEventListener("resize", () => {

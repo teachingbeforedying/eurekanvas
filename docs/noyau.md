@@ -292,6 +292,80 @@ L'historique garde l'état d'avant chaque action, ce qui ne copie que des réfé
 
 **Suite** : la sélection, avec deux gestes de l'ancienne version. Avec le zoomScroll, la sélection suit la vue quand on zoome. Avec le craneScroll (`1` + molette), la vue reste fixe et la sélection change d'échelle. Ensuite, `Ctrl+O` sélectionnera ce qu'il ajoute pour qu'on le place.
 
+## La sélection : décisions (2026-10-25)
+
+La sélection doit servir à tout : assembler des fichiers, corriger un dessin, composer en profondeur, préparer mathgame, copier-coller, appliquer des opérations à un ensemble d'objets. La sélection native de fabric, qu'utilisait l'ancienne version, calcule en flottants dans un seul repère : elle ne tient pas à travers les profondeurs. Il faut donc une sélection à nous.
+
+**Ce que faisait l'ancienne version** (deux lectures de `3DRoom+ic.html`) :
+- la sélection de fabric : clic, rectangle, Maj+clic, Ctrl+A ; relâcher Espace désélectionnait tout ;
+- un cadre avec des poignées ; `Suppr` effaçait ; `Ctrl+C` / `Ctrl+V` copiaient un seul objet, collé à la même place et à la même taille à l'écran ;
+- `X` dupliquait ; Maj+G / Maj+B composaient et décomposaient ;
+- tous les traits d'un même appui sur `²` devenaient un seul objet composite ;
+- la molette n'emportait en profondeur que les objets **tenus** (bouton enfoncé sur eux), à taille constante à l'écran, et Maj le faisait par puissances de 2 (L33791, L33841) ;
+- `1` + molette changeait l'échelle de la sélection autour de son centre (probablement cassé dans la dernière version : NaN, L34493) ;
+- les boutons de la souris étaient inversés par défaut (L77053) ; il n'y avait aucune annulation.
+
+**Décisions de Sébastien** :
+- **Dessin et sélection, comme avant.**
+  - Le bouton gauche sélectionne et tient ; `²` tenu (la touche `Backquote`, quelle que soit la disposition du clavier) puis le bouton gauche dessinent.
+  - Seul l'ordre `²` d'abord compte, et lâcher `²` pendant un trait ne l'arrête pas.
+  - Le bouton droit, celui du milieu, et Espace + gauche déplacent la vue ; Espace + gauche garde la sélection.
+- **Un objet = un appui sur `²`**, même si l'on relâche le bouton entre deux traits.
+  - `Ctrl+Z` pendant l'appui retire le dernier trait ; après l'appui, tout le groupe.
+  - Maj+G groupe la sélection (les groupes s'emboîtent), et Maj+B défait un niveau.
+  - Un groupe tracé ne devient pas la sélection.
+- **Sélectionner.**
+  - Clic ; Maj+clic ajoute ou retire ; `Alt`+clic prend l'objet du dessous (comme Inkscape et CorelDRAW ; Illustrator fait la même chose avec Ctrl+clic).
+  - `Échap` ou un clic dans le vide désélectionnent.
+  - Le rectangle dépend du sens, comme dans AutoCAD : de gauche à droite, seulement ce qui est entièrement dedans ; de droite à gauche, tout ce qu'il touche. Il prend à toute profondeur.
+- **Affichage** : une autre couleur et un cadre pointillé, sans poignées.
+- **Déplacer.**
+  - Appuyer sur un objet le prend et le déplace en un geste.
+  - Flèches : 1 px, Maj : 10 px.
+  - `Échap` pendant un glisser remet tout à sa place et à sa profondeur d'avant.
+- **En profondeur.**
+  - **zoomScroll** : la molette emporte ce qu'on tient, qui garde sa place et sa taille à l'écran et reste sous le pointeur, même quand la vue se déplace.
+  - **craneScroll** : `1` + molette ; la vue reste fixe et la sélection change d'échelle autour de son centre.
+  - Avec Maj, ces deux gestes avancent par puissances de 2.
+- **Effacer** : `Suppr` et Retour arrière ; `Ctrl+X` coupe.
+- **Copier-coller** par le presse-papiers du système, au format du dessin. On colle à la même place et à la même taille à l'écran qu'à la copie, avec un décalage de 20 px si la copie tomberait exactement sur l'original. Ce qui est collé devient la sélection, comme ce qu'ajoute `Ctrl+O`.
+- **Interface** : rien que le dessin.
+  - Le panneau est caché par défaut et `H` l'affiche.
+  - Un message bref s'affiche en bas de l'écran pendant 3 s.
+  - Les avertissements de perte possible restent jusqu'à un clic ou `Échap`.
+
+**Livraison en quatre étapes**, chacune essayée à la main et commitée :
+1. les groupes, le mode `²`, le format, l'interface ;
+2. sélectionner, effacer, grouper ;
+3. déplacer, zoomScroll, craneScroll ;
+4. copier, couper, coller, et `Ctrl+O` qui sélectionne.
+
+**Non prévu pour l'instant** : poignées, rotation, lasso, verrouillage, ordre d'affichage, aimantation à une grille.
+
+## Étape 1 de la sélection : groupes, touche `²`, interface (2026-10-25)
+
+- **Objets** (`packages/engine/src/drawing.ts`) : `Item = Stroke | Group`, avec des groupes emboîtables.
+- **Format `eurekanvas/drawing` version 2** ([drawing-format.md](./drawing-format.md)) : `items`, où chaque objet est un document de trait ou `{ "group": [...] }`. La version 1 se lit toujours, chaque trait devenant un objet seul, donc les fichiers et le dessin gardé restent lisibles.
+- **L'éditeur** ne dessine que si `²` était tenu à l'appui du bouton.
+  - Pendant l'appui sur `²`, chaque trait est une action. À la fin de l'appui (relâchement de `²`, ou fin du trait en cours s'il dure plus longtemps), les traits deviennent un seul objet et leurs actions n'en font plus qu'une.
+  - Une autre action au milieu d'un appui (`K`, `Ctrl+O`, reprise du dessin gardé) termine d'abord le groupe en cours.
+  - La perte de focus de la page vaut relâchement de `²` et d'Espace.
+- **Interface** : le panneau est caché par défaut, `H` l'affiche (choix mémorisé), et les messages s'affichent en bas de l'écran.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements et touches) :
+- sans `²`, rien n'est dessiné ;
+- trois traits avec `²` tenu, puis `Ctrl+Z` qui retire le dernier ; au relâchement, un groupe de deux traits ; `Ctrl+Z` le retire d'un coup ;
+- la perte de focus termine l'appui ;
+- `H` (vraie touche) affiche puis cache le panneau, et le choix est mémorisé ;
+- `Ctrl+S` affiche son message, qui disparaît après 3 s ;
+- le dessin gardé en version 1 se relit ; le groupe s'enregistre en version 2 et revient après un rechargement ;
+- un dessin gardé illisible donne un avertissement encore affiché après 4 s, qu'un clic ferme ;
+- aucune erreur dans la console.
+
+**Contrôle par mutation** : 7 modifications volontaires (dessin sans `²`, historique non fondu, groupe non terminé après un trait commencé avant le relâchement, annulation qui oublie le compte des traits, `K` qui ne termine pas le groupe, groupe vide accepté, version 1 refusée) ; chacune fait échouer au moins un test.
+
+**Essayé à la main par Sébastien**, avec la vraie touche `²` : ça marche. Mes outils, eux, ne peuvent pas tenir une touche pendant un glisser : ils envoient des événements clavier synthétiques.
+
 ## Critères de réussite du tronçon
 
 - `packages/engine` : tests Vitest qui passent. En particulier :

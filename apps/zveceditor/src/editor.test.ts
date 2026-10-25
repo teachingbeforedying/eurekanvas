@@ -17,6 +17,13 @@ import { Editor, STROKE_WIDTH_PIXELS, WHEEL_STEP, wheelZoomFactor } from "./edit
 
 const viewport: Viewport = { width: 1280, height: 720 };
 
+/** An editor with the drawing key (²) held, so that the primary button draws. */
+function drawingEditor(): Editor {
+  const editor = new Editor(viewport);
+  editor.setDrawKeyHeld(true);
+  return editor;
+}
+
 function samePoint(a: Point, b: Point): boolean {
   return equals(a.x, b.x) && equals(a.y, b.y);
 }
@@ -42,7 +49,7 @@ describe("wheelZoomFactor", () => {
 
 describe("drawing", () => {
   it("draws a stroke with the pointer, and shows it while it is being drawn", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     editor.pointerMove({ x: 150, y: 120 });
     expect(editor.isDrawing).toBe(true);
@@ -55,14 +62,14 @@ describe("drawing", () => {
   });
 
   it("makes a dot from a click without movement", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 300, y: 300 }, "primary");
     editor.pointerUp();
     expect(editor.stats).toEqual({ strokes: 1, sections: 1, points: 1 });
   });
 
   it("draws nothing when the pointer moves with no button down", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerMove({ x: 10, y: 10 });
     editor.pointerMove({ x: 20, y: 20 });
     editor.pointerUp();
@@ -70,7 +77,7 @@ describe("drawing", () => {
   });
 
   it("ignores a second button press while one is already down", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     editor.pointerDown({ x: 400, y: 400 }, "primary");
     editor.pointerMove({ x: 150, y: 150 });
@@ -79,7 +86,7 @@ describe("drawing", () => {
   });
 
   it("makes the stroke the same thickness on the screen as the pen setting", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     editor.pointerMove({ x: 150, y: 120 });
     editor.pointerUp();
@@ -90,7 +97,7 @@ describe("drawing", () => {
 
 describe("zoom", () => {
   it("zooms around the pointer: the world point under it does not move", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     const pointer = { x: 913.5, y: 207.25 };
     const before = screenToWorld(editor.camera, viewport, pointer);
     editor.wheel(pointer, -100);
@@ -101,7 +108,7 @@ describe("zoom", () => {
   });
 
   it("does not draw anything when the button is not down", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.wheel({ x: 500, y: 300 }, -300);
     expect(editor.stats.strokes).toBe(0);
   });
@@ -127,7 +134,7 @@ describe("zooming while drawing", () => {
   }
 
   it("continues the same stroke across 100 levels of zoom, with no gap", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     const drawing = spiral(editor, 800, -60); // a factor of 1.12 per event
     expect(editor.camera.zLevel).toBeGreaterThan(100);
     expect(editor.stats.strokes).toBe(1);
@@ -152,7 +159,7 @@ describe("zooming while drawing", () => {
   });
 
   it("keeps the pen thickness constant on the screen at every point", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     const drawing = spiral(editor, 400, -60);
     const stroke = editor.scene.strokes[0];
     if (!stroke) throw new Error("no stroke");
@@ -166,7 +173,7 @@ describe("zooming while drawing", () => {
   });
 
   it("does not add a point when only the wheel turns", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 400, y: 300 }, "primary");
     editor.pointerMove({ x: 450, y: 320 });
     const before = editor.stats.points;
@@ -178,7 +185,7 @@ describe("zooming while drawing", () => {
   });
 
   it("zooms out while drawing too", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     for (let i = 0; i < 300; i++) editor.wheel({ x: 640, y: 360 }, -60); // go deep first
     expect(editor.camera.zLevel).toBeGreaterThan(30);
     const startLevel = editor.camera.zLevel;
@@ -190,7 +197,7 @@ describe("zooming while drawing", () => {
 
 describe("moving the view", () => {
   it("makes the content follow the pointer when dragging with the middle button", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.wheel({ x: 300, y: 200 }, -100); // an arbitrary zoom, so that the test is not trivial
     const start = { x: 400, y: 300 };
     const world = screenToWorld(editor.camera, viewport, start);
@@ -205,7 +212,7 @@ describe("moving the view", () => {
   });
 
   it("does the same with the secondary button", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     const world = screenToWorld(editor.camera, viewport, { x: 100, y: 100 });
     editor.pointerDown({ x: 100, y: 100 }, "secondary");
     editor.pointerMove({ x: 160, y: 140 });
@@ -217,7 +224,7 @@ describe("moving the view", () => {
   });
 
   it("moves the view with the primary button while Space is held, and draws again once it is released", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setSpaceHeld(true);
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     editor.pointerMove({ x: 130, y: 100 });
@@ -231,7 +238,7 @@ describe("moving the view", () => {
   });
 
   it("keeps the drawing under the pointer while zooming during a drag", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     const world = screenToWorld(editor.camera, viewport, { x: 640, y: 360 });
     editor.pointerDown({ x: 640, y: 360 }, "middle");
     editor.wheel({ x: 640, y: 360 }, -100);
@@ -253,7 +260,7 @@ describe("undo, reset and resize", () => {
   }
 
   it("undoes the last stroke, one at a time", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     drawTwoStrokes(editor);
     expect(editor.stats.strokes).toBe(2);
     editor.undo();
@@ -264,7 +271,7 @@ describe("undo, reset and resize", () => {
   });
 
   it("does not undo while a stroke is being drawn", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     drawTwoStrokes(editor);
     editor.pointerDown({ x: 100, y: 300 }, "primary");
     editor.pointerMove({ x: 200, y: 300 });
@@ -275,7 +282,7 @@ describe("undo, reset and resize", () => {
   });
 
   it("goes back to the starting view and keeps the strokes", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     drawTwoStrokes(editor);
     editor.wheel({ x: 300, y: 300 }, -400);
     editor.pointerDown({ x: 10, y: 10 }, "middle");
@@ -288,7 +295,7 @@ describe("undo, reset and resize", () => {
   });
 
   it("keeps the same world point at the middle of the screen when the window is resized", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.wheel({ x: 200, y: 100 }, -300);
     const centre = editor.camera.center;
     editor.resize({ width: 800, height: 500 });

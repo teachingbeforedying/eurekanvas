@@ -32,11 +32,36 @@
         white-space: pre;
         user-select: none;
       }
+      #message {
+        position: fixed;
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: calc(100% - 32px);
+        padding: 6px 12px;
+        font: 13px/1.4 system-ui, sans-serif;
+        color: #222;
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        pointer-events: none;
+        user-select: none;
+      }
+      #message.warning {
+        border-color: #c77700;
+        background: #fff4e0;
+        pointer-events: auto; /* a click closes it */
+        cursor: pointer;
+      }
+      [hidden] {
+        display: none !important;
+      }
     </style>
   </head>
   <body>
     <canvas id="canvas"></canvas>
-    <pre id="hud"></pre>
+    <pre id="hud" hidden></pre>
+    <div id="message" role="status" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

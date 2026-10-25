@@ -4,6 +4,13 @@ import { DEFAULT_PEN, Editor, type Pen } from "./editor";
 
 const viewport: Viewport = { width: 1280, height: 720 };
 
+/** An editor with the drawing key (²) held, so that the primary button draws. */
+function drawingEditor(): Editor {
+  const editor = new Editor(viewport);
+  editor.setDrawKeyHeld(true);
+  return editor;
+}
+
 /** A rope of fixed length, or the raw pen for a length of 0. */
 function ropePen(length: number): Pen {
   return length === 0 ? { ...DEFAULT_PEN, kind: "raw" } : { ...DEFAULT_PEN, kind: "fixed", length };
@@ -22,7 +29,7 @@ function worldPointsOfFirstStroke(editor: Editor): Point[] {
 
 describe("moving the view while drawing", () => {
   it("pauses the stroke, moves the view, and goes on from the end of the stroke", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 400, y: 300 }, "primary");
     editor.pointerMove({ x: 500, y: 300 });
     const pointsBefore = editor.stats.points;
@@ -52,7 +59,7 @@ describe("moving the view while drawing", () => {
   });
 
   it("works with the middle button too", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     editor.pointerMove({ x: 150, y: 100 });
     editor.pointerDown({ x: 150, y: 100 }, "middle");
@@ -64,7 +71,7 @@ describe("moving the view while drawing", () => {
   });
 
   it("ignores the primary button pressed while the view is moving", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 100, y: 100 }, "secondary");
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     editor.pointerMove({ x: 160, y: 130 });
@@ -75,7 +82,7 @@ describe("moving the view while drawing", () => {
   });
 
   it("ends the stroke when the primary button is released, and the view keeps following the pointer", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 400, y: 300 }, "primary");
     editor.pointerMove({ x: 450, y: 300 });
     editor.pointerDown({ x: 450, y: 300 }, "secondary");
@@ -93,7 +100,7 @@ describe("moving the view while drawing", () => {
   });
 
   it("does not forget a button when two are pressed", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.pointerDown({ x: 10, y: 10 }, "secondary");
     editor.pointerDown({ x: 10, y: 10 }, "middle");
     editor.pointerUp("secondary");
@@ -118,7 +125,7 @@ function seeded(seed: number): () => number {
 /** Draws a horizontal line at y = 300 with a tremor of +-3 pixels, and returns the editor. */
 function drawShakyLine(ropeLength: number): Editor {
   const random = seeded(5);
-  const editor = new Editor(viewport);
+  const editor = drawingEditor();
   editor.setPen(ropePen(ropeLength));
   editor.pointerDown({ x: 100, y: 300 }, "primary");
   for (let x = 104; x <= 700; x += 4) editor.pointerMove({ x, y: 300 + (random() - 0.5) * 6 });
@@ -147,7 +154,7 @@ describe("the rope", () => {
   });
 
   it("starts the stroke at the press and ends it at the brush, one rope length behind the release", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setPen(ropePen(16));
     const start = screenToWorld(editor.camera, viewport, { x: 100, y: 300 });
     editor.pointerDown({ x: 100, y: 300 }, "primary");
@@ -163,7 +170,7 @@ describe("the rope", () => {
 
   it("adds nothing when the stroke ends: what was visible is what is kept, with either rope", () => {
     for (const pen of [ropePen(32), { ...DEFAULT_PEN, kind: "speed", lag: 50 } as const]) {
-      const editor = new Editor(viewport);
+      const editor = drawingEditor();
       editor.setPen(pen);
       const at = (i: number) => ({ x: 640 + 200 * Math.cos(i / 100), y: 360 + 200 * Math.sin(i / 100) });
       editor.pointerDown(at(0), "primary", 0);
@@ -179,7 +186,7 @@ describe("the rope", () => {
   });
 
   it("leaves a dot for a gesture shorter than the rope", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setPen(ropePen(16));
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     editor.pointerMove({ x: 110, y: 100 });
@@ -188,7 +195,7 @@ describe("the rope", () => {
   });
 
   it("absorbs a tremor smaller than the rope", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setPen(ropePen(16));
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     for (const p of [{ x: 104, y: 97 }, { x: 96, y: 105 }, { x: 110, y: 108 }, { x: 99, y: 90 }]) editor.pointerMove(p);
@@ -196,7 +203,7 @@ describe("the rope", () => {
   });
 
   it("changes the pen for the next stroke only, and refuses an invalid length or lag", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setPen(ropePen(16));
     editor.pointerDown({ x: 100, y: 100 }, "primary");
     editor.setPen(ropePen(64)); // ignored while drawing
@@ -212,7 +219,7 @@ describe("the rope", () => {
   });
 
   it("keeps the end of the stroke on the drawing when the wheel zooms", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setPen(ropePen(40));
     editor.pointerDown({ x: 100, y: 300 }, "primary");
     editor.pointerMove({ x: 500, y: 300 }); // the brush is 40 px behind: at x = 460
@@ -228,7 +235,7 @@ describe("the rope", () => {
   });
 
   it("keeps the end of the stroke on the drawing when the view moves", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setPen(ropePen(40));
     editor.pointerDown({ x: 100, y: 300 }, "primary");
     editor.pointerMove({ x: 500, y: 300 }); // the brush is at x = 460
@@ -252,7 +259,7 @@ describe("the rope that follows the speed of the hand", () => {
   const speedPen: Pen = { ...DEFAULT_PEN, kind: "speed", lag: 50 };
 
   it("is long when the hand is fast and short when it is slow", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setPen(speedPen);
     expect(editor.ropeNow).toBeNull();
     editor.pointerDown({ x: 100, y: 300 }, "primary", 1000);
@@ -270,7 +277,7 @@ describe("the rope that follows the speed of the hand", () => {
   });
 
   it("does not jump when drawing goes on after the view moved", () => {
-    const editor = new Editor(viewport);
+    const editor = drawingEditor();
     editor.setPen(speedPen);
     editor.pointerDown({ x: 100, y: 300 }, "primary", 0);
     for (let t = 4; t <= 200; t += 4) editor.pointerMove({ x: 100 + t, y: 300 }, t);
