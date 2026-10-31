@@ -318,7 +318,13 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
   - Clic ; Maj+clic ajoute ou retire ; `Alt`+clic prend l'objet du dessous (comme Inkscape et CorelDRAW ; Illustrator fait la même chose avec Ctrl+clic).
   - `Échap` ou un clic dans le vide désélectionnent.
   - Le rectangle dépend du sens, comme dans AutoCAD : de gauche à droite, seulement ce qui est entièrement dedans ; de droite à gauche, tout ce qu'il touche. Il prend à toute profondeur.
-- **Affichage** : une autre couleur et un cadre pointillé, sans poignées.
+- **Affichage** : une autre couleur et un cadre pointillé, sans poignées. Précisé le 2026-10-31 :
+  - les traits sélectionnés passent en bleu ;
+  - un seul cadre pointillé, autour de toute la sélection ; il englobe aussi les objets pris mais invisibles (trop petits, trop loin), et un message bref dit combien ne se voient pas ;
+  - au survol d'un objet, le curseur change (pas de surlignage) ;
+  - un clic prend un trait jusqu'à 4 px de son bord (l'encre, pas la boîte englobante comme fabric dans l'ancienne version).
+- **Grouper** (2026-10-31) : Maj+G place le groupe à la place de l'objet sélectionné le plus haut, comme Inkscape. Après Maj+G ou Maj+B, le résultat est sélectionné (le groupe, ou les objets libérés).
+- **Tout sélectionner** (2026-10-31) : `Ctrl+A`, à toute profondeur, dès l'étape 2. `Espace` + `Ctrl+A` (les trois tenues, dans n'importe quel ordre) prend seulement ce qui touche l'écran, comme un rectangle tiré de droite à gauche sur tout l'écran, objets trop petits pour être vus compris. `A` et `E` restent libres : dans l'ancienne version ils zoomaient et dézoomaient (plus vite avec Maj), et ce comportement devrait revenir.
 - **Déplacer.**
   - Appuyer sur un objet le prend et le déplace en un geste.
   - Flèches : 1 px, Maj : 10 px.
@@ -340,7 +346,9 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 3. déplacer, zoomScroll, craneScroll ;
 4. copier, couper, coller, et `Ctrl+O` qui sélectionne.
 
-**Non prévu pour l'instant** : poignées, rotation, lasso, verrouillage, ordre d'affichage, aimantation à une grille.
+**Non prévu pour l'instant** : poignées, lasso, verrouillage, ordre d'affichage, aimantation à une grille.
+
+**Rotation : très bientôt** (demande de Sébastien, 2026-10-31). Dans l'ancienne version, il l'avait faite tard et elle lui avait coûté beaucoup d'efforts : plus tôt on la gère, mieux c'est. À décider avant de la commencer : tourner les objets, la vue, ou les deux ; et comment la stocker, puisqu'une rotation quelconque ne garde pas les positions dyadiques exactes (cos et sin ne sont pas dyadiques) : une transformation gardée par objet, ou des points recalculés.
 
 ## Étape 1 de la sélection : groupes, touche `²`, interface (2026-10-25)
 
@@ -365,6 +373,38 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 **Contrôle par mutation** : 7 modifications volontaires (dessin sans `²`, historique non fondu, groupe non terminé après un trait commencé avant le relâchement, annulation qui oublie le compte des traits, `K` qui ne termine pas le groupe, groupe vide accepté, version 1 refusée) ; chacune fait échouer au moins un test.
 
 **Essayé à la main par Sébastien**, avec la vraie touche `²` : ça marche. Mes outils, eux, ne peuvent pas tenir une touche pendant un glisser : ils envoient des événements clavier synthétiques.
+
+## Étape 2 de la sélection : sélectionner, effacer, grouper (2026-10-31)
+
+- **Moteur** (`packages/engine/src/hit.ts`) :
+  - `itemsAt` donne les objets dessinés sous un point de l'écran, du dessus vers le dessous. Seul ce qui est dessiné compte : mêmes règles que `selectDrawableSections`, dont le choix par section est devenu `drawableProjection`. Le test mesure, en unités locales, la distance du pointeur à chaque segment, avec l'épaisseur interpolée entre ses deux bouts, plus la tolérance (4 px).
+  - `itemsInRectangle` travaille sur un rectangle exact du monde (dyadiques). En mode `inside`, il compare la boîte exacte de l'encre de l'objet. En mode `touching`, la boîte exacte de chaque section tranche les cas simples. Quand le rectangle coupe cette boîte, ses côtés passent en unités locales de la section, bornés près d'elle pour tenir dans un `number`. Chaque segment est alors élargi de sa demi-épaisseur, en carré : jusqu'à 0,4 épaisseur de trop près d'un coin.
+  - `itemBounds`, `boundsOf` et `boundsToScreen` donnent des boîtes exactes, mémorisées par section et par objet.
+- **Éditeur** :
+  - La sélection est un ensemble d'objets du premier niveau, gardés par identité. À chaque changement des objets, `Ctrl+Z` compris, elle ne garde que ceux encore présents.
+  - Un appui sur un objet est un clic (l'étape 3 en fera un déplacement). Ailleurs, il devient un rectangle au-delà de 4 px. Le coin de départ est un point exact du monde : on peut zoomer ou déplacer la vue pendant le tracé, et le rectangle prend à toute profondeur.
+  - Alt+clic prend l'objet sous le plus profond des objets sélectionnés à cet endroit (sous celui du dessus si aucun ne l'est), puis repart du haut. Maj+Alt+clic ajoute cet objet.
+  - Maj+clic dans le vide garde la sélection ; Maj+rectangle ajoute.
+  - Effacer, grouper et dégrouper sont chacun une action, et terminent d'abord l'appui sur `²` en cours. Sélectionner ne le termine pas. Maj+G demande au moins deux objets.
+  - `Échap` abandonne le rectangle en cours, sinon désélectionne.
+- **Rendu** : bleu `#1a66ff` pour la sélection, le cadre et le rectangle tiré de gauche à droite ; vert `#1f9d55`, en pointillé, pour le rectangle tiré de droite à gauche, comme AutoCAD. Le cadre est à 4 px de l'encre, et un côté lointain est dessiné à 10 px hors de l'écran au plus.
+- **Page** : curseur en main au survol d'un objet ; `Alt` n'ouvre plus la barre de menus ; un message (« 3 objects selected (1 not visible) ») après un rectangle, `Ctrl+A` ou `Espace` + `Ctrl+A`.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements synthétiques ; le panneau était caché, donc le rendu a été forcé à la main) :
+- un clic à 2 px d'un trait de groupe prend le groupe ; Maj+clic ajoute ; un clic dans le vide désélectionne ;
+- rectangles dans les deux sens (bleu plein, vert pointillé) ; `Échap` pendant un rectangle ;
+- `Ctrl+A`, et `Espace` + `Ctrl+A` dans les deux ordres, après un déplacement de la vue (« 3 objects selected (2 not visible) ») ;
+- Maj+G, Maj+B, `Ctrl+Z`, `Suppr`, Retour arrière ; Alt+clic sur deux objets superposés ; `Alt` empêché à l'appui et au relâchement ;
+- après un rechargement, les groupes sont relus ; aucune erreur dans la console.
+
+**Contrôle par mutation** : 26 modifications volontaires. Au premier passage, 7 survivaient :
+- deux montraient un cas absent des tests : la partie fine d'un trait au bord d'une boîte élargie par sa partie épaisse ;
+- une venait de trois objets superposés identiques, que `toEqual` ne distinguait pas ;
+- deux montraient que rien ne vérifiait `Ctrl+Z` après un effacement ou un groupement pendant un appui sur `²` ;
+- une était mal écrite, et a été refaite ;
+- la dernière (`Ctrl+A` qui terminait l'appui) a fait changer le code : sélectionner ne termine plus l'appui.
+
+Toutes sont tuées ensuite.
 
 ## Critères de réussite du tronçon
 

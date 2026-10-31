@@ -5,14 +5,28 @@
  * `Renderer` and is given a `Scene` whenever something changes.
  */
 
-import type { Camera, Viewport } from "./camera";
+import type { Camera, ScreenPoint, Viewport } from "./camera";
+import type { RectangleMode, WorldBounds } from "./hit";
 import { type Section, type SectionProjection, type Stroke, projectSection } from "./stroke";
+
+/** The rectangle being dragged to select objects, on the screen: from where it started to the pointer. */
+export interface SelectionBand {
+  readonly from: ScreenPoint;
+  readonly to: ScreenPoint;
+  readonly mode: RectangleMode;
+}
 
 export interface Scene {
   readonly camera: Camera;
   readonly viewport: Viewport;
   /** In drawing order: finished strokes first, then the stroke being drawn, if any. */
   readonly strokes: readonly Stroke[];
+  /** The strokes of the selected objects, drawn in another colour. */
+  readonly selectedStrokes?: ReadonlySet<Stroke>;
+  /** The exact box around the selected objects, drawn as a dashed frame; `null` with nothing selected. */
+  readonly selectionBounds?: WorldBounds | null;
+  /** The rectangle being dragged to select, if any. */
+  readonly band?: SelectionBand | null;
 }
 
 export interface Renderer {
@@ -53,7 +67,8 @@ export interface SelectionOptions {
   readonly maxReachPixels?: number;
 }
 
-interface Extent {
+/** The box of a section's points, in its local units, and its largest thickness. */
+export interface SectionExtent {
   readonly minX: number;
   readonly maxX: number;
   readonly minY: number;
@@ -62,9 +77,9 @@ interface Extent {
 }
 
 // Sections are immutable, so their extent can be remembered for as long as the section object lives.
-const extents = new WeakMap<Section, Extent>();
+const extents = new WeakMap<Section, SectionExtent>();
 
-function extentOf(section: Section): Extent {
+export function sectionExtent(section: Section): SectionExtent {
   const known = extents.get(section);
   if (known !== undefined) return known;
   let minX = Infinity;
@@ -97,31 +112,42 @@ export function selectDrawableSections(
   viewport: Viewport,
   options: SelectionOptions = {},
 ): DrawableSection[] {
-  const maxLevelGap = options.maxLevelGap ?? DEFAULT_MAX_LEVEL_GAP;
-  const minPixels = options.minPixels ?? DEFAULT_MIN_PIXELS;
-  const maxReachPixels = options.maxReachPixels ?? DEFAULT_MAX_REACH_PIXELS;
   const drawable: DrawableSection[] = [];
-
   for (const stroke of strokes) {
     for (const section of stroke.sections) {
-      if (camera.zLevel - section.zLevel > maxLevelGap) continue;
-      const projection = projectSection(section, camera, viewport);
-      if (projection === null) continue;
-
-      const extent = extentOf(section);
-      const half = extent.maxWidth / 2;
-      const { origin, scale } = projection;
-      const reach = Math.max(Math.abs(extent.minX), Math.abs(extent.maxX), Math.abs(extent.minY), Math.abs(extent.maxY)) + half;
-      if (reach * scale > maxReachPixels) continue;
-      const left = origin.x + (extent.minX - half) * scale;
-      const right = origin.x + (extent.maxX + half) * scale;
-      const top = origin.y + (extent.minY - half) * scale;
-      const bottom = origin.y + (extent.maxY + half) * scale;
-
-      if (Math.max(right - left, bottom - top) < minPixels) continue;
-      if (right < 0 || left > viewport.width || bottom < 0 || top > viewport.height) continue;
-      drawable.push({ section, projection });
+      const projection = drawableProjection(section, camera, viewport, options);
+      if (projection !== null) drawable.push({ section, projection });
     }
   }
   return drawable;
+}
+
+/** Where a section is drawn on the screen, or `null` when it is left out (see `selectDrawableSections`). */
+export function drawableProjection(
+  section: Section,
+  camera: Camera,
+  viewport: Viewport,
+  options: SelectionOptions = {},
+): SectionProjection | null {
+  const maxLevelGap = options.maxLevelGap ?? DEFAULT_MAX_LEVEL_GAP;
+  const minPixels = options.minPixels ?? DEFAULT_MIN_PIXELS;
+  const maxReachPixels = options.maxReachPixels ?? DEFAULT_MAX_REACH_PIXELS;
+
+  if (camera.zLevel - section.zLevel > maxLevelGap) return null;
+  const projection = projectSection(section, camera, viewport);
+  if (projection === null) return null;
+
+  const extent = sectionExtent(section);
+  const half = extent.maxWidth / 2;
+  const { origin, scale } = projection;
+  const reach = Math.max(Math.abs(extent.minX), Math.abs(extent.maxX), Math.abs(extent.minY), Math.abs(extent.maxY)) + half;
+  if (reach * scale > maxReachPixels) return null;
+  const left = origin.x + (extent.minX - half) * scale;
+  const right = origin.x + (extent.maxX + half) * scale;
+  const top = origin.y + (extent.minY - half) * scale;
+  const bottom = origin.y + (extent.maxY + half) * scale;
+
+  if (Math.max(right - left, bottom - top) < minPixels) return null;
+  if (right < 0 || left > viewport.width || bottom < 0 || top > viewport.height) return null;
+  return projection;
 }

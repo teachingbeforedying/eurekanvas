@@ -53,12 +53,25 @@ export {
   type DrawableSection,
   type Renderer,
   type Scene,
+  type SelectionBand,
   type SelectionOptions,
   DEFAULT_MAX_LEVEL_GAP,
   DEFAULT_MAX_REACH_PIXELS,
   DEFAULT_MIN_PIXELS,
   selectDrawableSections,
 } from "./render";
+export {
+  type RectangleMode,
+  type ScreenBounds,
+  type WorldBounds,
+  boundsFromCorners,
+  boundsOf,
+  boundsToScreen,
+  itemBounds,
+  itemsAt,
+  itemsInRectangle,
+  unionBounds,
+} from "./hit";
 export {
   type Camera,
   type CameraOptions,

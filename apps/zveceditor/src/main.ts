@@ -1,7 +1,7 @@
 import { type Drawing, type ScreenPoint, type Viewport, drawingFromJSON, drawingToJSON, log2Scale } from "@eurekanvas/engine";
 import { FabricRenderer } from "@eurekanvas/renderer-fabric";
 import { buttonChanges, describePen, drawingFileName, nextPen, parseStoredPen, stepPen } from "./controls";
-import { Editor, type Pen } from "./editor";
+import { Editor, type Modifiers, type Pen, type SelectionReport } from "./editor";
 import { keepUnreadable, loadAutosave, saveAutosave } from "./storage";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
@@ -56,6 +56,13 @@ function reason(error: unknown): string {
 }
 function objects(count: number): string {
   return count === 1 ? "1 object" : `${count} objects`;
+}
+function bringsBack(count: number): string {
+  return count === 1 ? "Ctrl+Z brings it back" : "Ctrl+Z brings them back";
+}
+function showSelected(report: SelectionReport): void {
+  const hidden = report.notVisible > 0 ? ` (${report.notVisible} not visible)` : "";
+  showMessage(`${objects(report.count)} selected${hidden}`);
 }
 
 // The panel at the top left (zoom, statistics, pen, help) is hidden unless H shows it; the choice is remembered.
@@ -194,8 +201,17 @@ function invalidate(): void {
   requestAnimationFrame(() => {
     frameRequested = false;
     renderer.render(editor.scene);
+    updateCursor();
     if (!hud!.hidden) updateHud();
   });
+}
+
+// The cursor shows when the left button would take an object. `pointer` is where the pointer is over the
+// canvas, or `null` when it is outside.
+let pointer: ScreenPoint | null = null;
+function updateCursor(): void {
+  const over = buttonsDown === 0 && pointer !== null && editor.pointsAtObject(pointer);
+  canvas!.style.cursor = over ? "pointer" : "";
 }
 
 function updateHud(): void {
@@ -203,11 +219,14 @@ function updateHud(): void {
   const stats = editor.stats;
   hud!.textContent = [
     `zoom 2^${log2Scale(camera).toFixed(2)}   (level ${camera.zLevel}, factor ${camera.factor.toFixed(3)})`,
-    `objects ${editor.items.length} · strokes ${stats.strokes} · sections ${stats.sections} · points ${stats.points} · drawn sections ${renderer.drawnSections}`,
+    `objects ${editor.items.length} · selected ${editor.selection.size} · strokes ${stats.strokes} · sections ${stats.sections} · points ${stats.points} · drawn sections ${renderer.drawnSections}`,
     describePen(editor.pen, editor.ropeNow),
     `automatic save in this browser: ${autosave}`,
     ``,
     `draw: hold ² (the key left of 1), then the left button; the strokes drawn while ² stays held make one object`,
+    `select: left button (Shift: add or remove, Alt: the object below)    deselect: Escape or a click on empty space`,
+    `rectangle: drag from empty space; left to right takes what is inside, right to left what it touches`,
+    `select all: Ctrl+A    what touches the screen: Space + Ctrl+A    delete: Delete    group: Shift+G    ungroup: Shift+B`,
     `zoom: wheel (also while drawing)    move the view: right or middle button, or Space + left button`,
     `undo: Ctrl+Z (while ² is held: the last stroke)    reset the view: 0    clear: K (Ctrl+Z brings it back)`,
     `save a file: Ctrl+S    open a file (adds to the drawing): Ctrl+O    show or hide this panel: H`,
@@ -223,10 +242,14 @@ function position(event: MouseEvent): ScreenPoint {
 // does not send a `pointerdown`, only a `pointermove` with another `buttons` mask: so the buttons are
 // compared at every pointer event.
 let buttonsDown = 0;
-function syncButtons(buttons: number, p: ScreenPoint, time: number): void {
+function syncButtons(buttons: number, p: ScreenPoint, time: number, modifiers: Modifiers = {}): void {
   for (const change of buttonChanges(buttonsDown, buttons)) {
-    if (change.pressed) editor.pointerDown(p, change.button, time);
-    else editor.pointerUp(change.button);
+    if (change.pressed) {
+      editor.pointerDown(p, change.button, time, modifiers);
+    } else {
+      const report = editor.pointerUp(change.button);
+      if (report) showSelected(report); // a rectangle was released
+    }
   }
   buttonsDown = buttons;
 }
@@ -239,7 +262,7 @@ canvas.addEventListener("pointerdown", (event) => {
   } catch {
     // drawing still works without the capture
   }
-  syncButtons(event.buttons, position(event), event.timeStamp);
+  syncButtons(event.buttons, position(event), event.timeStamp, { shift: event.shiftKey, alt: event.altKey });
   invalidate();
 });
 
@@ -251,8 +274,14 @@ canvas.addEventListener("pointermove", (event) => {
     syncButtons(each.buttons, p, each.timeStamp);
     editor.pointerMove(p, each.timeStamp);
   }
+  pointer = position(event);
   if (editor.isMovingView) changed();
   invalidate();
+});
+
+canvas.addEventListener("pointerleave", () => {
+  pointer = null;
+  updateCursor();
 });
 
 function release(event: PointerEvent): void {
@@ -279,32 +308,76 @@ canvas.addEventListener(
   { passive: false },
 );
 
+// Space and A are followed for Space + Ctrl+A (selects what touches the screen), pressed in any order.
+let spaceDown = false;
+let aDown = false;
+
+function select(report: SelectionReport): void {
+  showSelected(report);
+  invalidate();
+}
+
 window.addEventListener("keydown", (event) => {
   const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+  const ctrl = event.ctrlKey || event.metaKey;
+  if (event.key.toLowerCase() === "a") aDown = true;
   if (event.code === "Backquote") {
     // the drawing key, read by its place (² on a French keyboard, ` on an English one)
     event.preventDefault();
     if (!event.repeat) editor.setDrawKeyHeld(true);
   } else if (event.key === "Escape") {
     hideMessage();
+    editor.cancel();
+    invalidate();
+  } else if (event.key === "Alt") {
+    event.preventDefault(); // Alt+click takes the object below: Alt must not open the menu bar (Firefox) or focus the browser menu
   } else if (event.code === "Space") {
     editor.setSpaceHeld(true);
+    spaceDown = true;
     event.preventDefault();
-  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+    if (!event.repeat && ctrl && aDown) select(editor.selectOnScreen());
+  } else if (ctrl && event.key.toLowerCase() === "a") {
+    event.preventDefault(); // instead of selecting the text of the page
+    if (!event.repeat) select(spaceDown ? editor.selectOnScreen() : editor.selectAll());
+  } else if (plain && (event.key === "Delete" || event.key === "Backspace")) {
+    event.preventDefault(); // older browsers go back to the previous page on Backspace
+    const count = editor.deleteSelection();
+    if (count > 0) {
+      showMessage(`deleted ${objects(count)} (${bringsBack(count)})`);
+      changed();
+      invalidate();
+    }
+  } else if (plain && event.shiftKey && event.key.toLowerCase() === "g") {
+    const count = editor.groupSelection();
+    if (count > 0) {
+      showMessage(`grouped ${objects(count)}`);
+      changed();
+      invalidate();
+    } else if (!editor.isDrawing) {
+      showMessage("select at least two objects to group them");
+    }
+  } else if (plain && event.shiftKey && event.key.toLowerCase() === "b") {
+    const count = editor.ungroupSelection();
+    if (count > 0) {
+      showMessage(count === 1 ? "ungrouped 1 group" : `ungrouped ${count} groups`);
+      changed();
+      invalidate();
+    }
+  } else if (ctrl && event.key.toLowerCase() === "z") {
     editor.undo();
     event.preventDefault();
     changed();
     invalidate();
-  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+  } else if (ctrl && event.key.toLowerCase() === "s") {
     event.preventDefault(); // instead of saving the page
     saveFile();
-  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+  } else if (ctrl && event.key.toLowerCase() === "o") {
     event.preventDefault(); // instead of opening a file in the browser
     fileInput.click();
   } else if (plain && event.key.toLowerCase() === "k") {
     const count = editor.items.length;
     if (editor.clear() && count > 0) {
-      showMessage(`cleared ${objects(count)} (Ctrl+Z brings them back)`);
+      showMessage(`cleared ${objects(count)} (${bringsBack(count)})`);
       changed();
       invalidate();
     }
@@ -325,7 +398,12 @@ window.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("keyup", (event) => {
-  if (event.code === "Space") editor.setSpaceHeld(false);
+  if (event.key.toLowerCase() === "a") aDown = false;
+  if (event.key === "Alt") event.preventDefault(); // Firefox opens its menu bar when Alt is released
+  if (event.code === "Space") {
+    editor.setSpaceHeld(false);
+    spaceDown = false;
+  }
   if (event.code === "Backquote") {
     editor.setDrawKeyHeld(false); // the strokes of the hold become one object
     changed();
@@ -336,6 +414,8 @@ window.addEventListener("keyup", (event) => {
 window.addEventListener("blur", () => {
   editor.setSpaceHeld(false);
   editor.setDrawKeyHeld(false);
+  spaceDown = false;
+  aDown = false;
   changed();
 });
 
