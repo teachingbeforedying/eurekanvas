@@ -14,13 +14,12 @@ import {
   type Stroke,
   StrokeRecorder,
   convertWidth,
-  localToScreen,
   pointWorld,
-  projectSection,
   strokeFromJSON,
   strokeToJSON,
   strokeWorldPoints,
 } from "./stroke";
+import { localToScreen, placedAlone, projectSection } from "./placement";
 import { at, createRandom } from "./test-utils";
 
 const viewport: Viewport = { width: 1280, height: 720 };
@@ -387,7 +386,7 @@ describe("projectSection and localToScreen", () => {
       for (const gap of [0, 5, 10, 20]) {
         const center = pointWorld(section, Math.floor(section.points.length / 2));
         const camera = createCamera({ center, zLevel: section.zLevel + gap, factor: 1.3 });
-        const projection = projectSection(section, camera, viewport);
+        const projection = projectSection(placedAlone(section), camera, viewport);
         if (projection === null) throw new Error(`section ${sectionIndex} should be projectable at a gap of ${gap}`);
         section.points.forEach((local, i) => {
           const approximate = localToScreen(projection, local);
@@ -401,13 +400,13 @@ describe("projectSection and localToScreen", () => {
 
   it("returns null instead of NaN or Infinity when the section is far from the camera in levels", () => {
     const section = at(drawing.stroke.sections, 0);
-    expect(projectSection(section, createCamera({ zLevel: 1100 }), viewport)).toBeNull();
-    expect(projectSection(section, createCamera({ zLevel: -1100 }), viewport)).toBeNull();
+    expect(projectSection(placedAlone(section), createCamera({ zLevel: 1100 }), viewport)).toBeNull();
+    expect(projectSection(placedAlone(section), createCamera({ zLevel: -1100 }), viewport)).toBeNull();
   });
 
   it("gives the screen scale of the local unit", () => {
     const section = at(drawing.stroke.sections, 3);
-    const projection = projectSection(section, createCamera({ zLevel: section.zLevel + 4, factor: 1.5 }), viewport);
+    const projection = projectSection(placedAlone(section), createCamera({ zLevel: section.zLevel + 4, factor: 1.5 }), viewport);
     expect(projection?.scale).toBe(2 ** 4 * 1.5);
   });
 });

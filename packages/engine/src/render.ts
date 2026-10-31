@@ -6,8 +6,9 @@
  */
 
 import type { Camera, ScreenPoint, Viewport } from "./camera";
-import type { RectangleMode, WorldBounds } from "./hit";
-import { type Section, type SectionProjection, type Stroke, projectSection } from "./stroke";
+import type { OrientedRectangle, RectangleMode } from "./hit";
+import { type PlacedSection, type SectionProjection, projectSection } from "./placement";
+import type { Section, Stroke } from "./stroke";
 
 /** The rectangle being dragged to select objects, on the screen: from where it started to the pointer. */
 export interface SelectionBand {
@@ -19,12 +20,14 @@ export interface SelectionBand {
 export interface Scene {
   readonly camera: Camera;
   readonly viewport: Viewport;
-  /** In drawing order: finished strokes first, then the stroke being drawn, if any. */
+  /** What to draw, in drawing order: the sections of the objects where they put them, then the stroke being drawn. */
+  readonly sections: readonly PlacedSection[];
+  /** The same strokes, as they were drawn (before their objects place them): to count them. */
   readonly strokes: readonly Stroke[];
-  /** The strokes of the selected objects, drawn in another colour. */
-  readonly selectedStrokes?: ReadonlySet<Stroke>;
-  /** The exact box around the selected objects, drawn as a dashed frame; `null` with nothing selected. */
-  readonly selectionBounds?: WorldBounds | null;
+  /** The sections of the selected objects, drawn in another colour. */
+  readonly selectedSections?: ReadonlySet<PlacedSection>;
+  /** The exact frame around the selection, drawn dashed; `null` with nothing selected. */
+  readonly selectionFrame?: OrientedRectangle | null;
   /** The rectangle being dragged to select, if any. */
   readonly band?: SelectionBand | null;
 }
@@ -38,9 +41,9 @@ export interface Renderer {
   dispose(): void;
 }
 
-/** A section together with the transformation that places it on the screen. */
+/** A placed section together with the transformation that puts it on the screen. */
 export interface DrawableSection {
-  readonly section: Section;
+  readonly placed: PlacedSection;
   readonly projection: SectionProjection;
 }
 
@@ -107,24 +110,22 @@ export function sectionExtent(section: Section): SectionExtent {
  * stroke whose points are just off the screen can still reach into it.
  */
 export function selectDrawableSections(
-  strokes: readonly Stroke[],
+  sections: readonly PlacedSection[],
   camera: Camera,
   viewport: Viewport,
   options: SelectionOptions = {},
 ): DrawableSection[] {
   const drawable: DrawableSection[] = [];
-  for (const stroke of strokes) {
-    for (const section of stroke.sections) {
-      const projection = drawableProjection(section, camera, viewport, options);
-      if (projection !== null) drawable.push({ section, projection });
-    }
+  for (const placed of sections) {
+    const projection = drawableProjection(placed, camera, viewport, options);
+    if (projection !== null) drawable.push({ placed, projection });
   }
   return drawable;
 }
 
-/** Where a section is drawn on the screen, or `null` when it is left out (see `selectDrawableSections`). */
+/** Where a placed section is drawn on the screen, or `null` when it is left out (see `selectDrawableSections`). */
 export function drawableProjection(
-  section: Section,
+  placed: PlacedSection,
   camera: Camera,
   viewport: Viewport,
   options: SelectionOptions = {},
@@ -133,17 +134,18 @@ export function drawableProjection(
   const minPixels = options.minPixels ?? DEFAULT_MIN_PIXELS;
   const maxReachPixels = options.maxReachPixels ?? DEFAULT_MAX_REACH_PIXELS;
 
-  if (camera.zLevel - section.zLevel > maxLevelGap) return null;
-  const projection = projectSection(section, camera, viewport);
+  if (camera.zLevel - placed.zLevel > maxLevelGap) return null;
+  const projection = projectSection(placed, camera, viewport);
   if (projection === null) return null;
 
-  const extent = sectionExtent(section);
+  const extent = sectionExtent(placed.section);
   const half = extent.maxWidth / 2;
   const { origin, scale, turn } = projection;
   const reach = Math.max(Math.abs(extent.minX), Math.abs(extent.maxX), Math.abs(extent.minY), Math.abs(extent.maxY)) + half;
   if (reach * scale > maxReachPixels) return null;
-  // the box of the ink, turned with the view: on the screen, the box around it
-  const [x0, x1, y0, y1] = [extent.minX - half, extent.maxX + half, extent.minY - half, extent.maxY + half];
+  // the box of the ink, mirrored and turned: on the screen, the box around it
+  const [x0, x1] = [extent.minX - half, extent.maxX + half];
+  const [y0, y1] = projection.mirror ? [-extent.maxY - half, -extent.minY + half] : [extent.minY - half, extent.maxY + half];
   const least = (a: number, b: number): number => (a >= 0 ? a * x0 : a * x1) + (b >= 0 ? b * y0 : b * y1);
   const most = (a: number, b: number): number => (a >= 0 ? a * x1 : a * x0) + (b >= 0 ? b * y1 : b * y0);
   const left = origin.x + least(turn.cos, -turn.sin) * scale;

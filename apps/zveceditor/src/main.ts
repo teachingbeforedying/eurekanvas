@@ -228,7 +228,9 @@ function updateHud(): void {
     `rectangle: drag from empty space; left to right takes what is inside, right to left what it touches`,
     `select all: Ctrl+A    what touches the screen: Space + Ctrl+A    delete: Delete    group: Shift+G    ungroup: Shift+B`,
     `zoom: wheel (also while drawing)    move the view: right or middle button, or Space + left button`,
-    `turn the view: hold R and move the mouse around the middle (Shift: 15° steps)    R+Shift+H / R+Shift+G: a quarter turn    R + release Space: straight`,
+    `turn the view: hold R and move the mouse around the middle (Shift: 15° steps)    R+Shift+H / R+Shift+G, or R+H / R+G with nothing selected: a quarter turn    R + release Space: straight`,
+    `turn the selection: R + left button, around its middle (Shift: 15° steps)    R+H / R+G: a quarter turn    R + release Space: each object straight on the screen`,
+    `mirror the selection: F+H (left and right)    F+V (top and bottom)`,
     `undo: Ctrl+Z (while ² is held: the last stroke)    reset the view: 0    clear: K (Ctrl+Z brings it back)`,
     `save a file: Ctrl+S    open a file (adds to the drawing): Ctrl+O    show or hide this panel: H`,
   ].join("\n");
@@ -310,10 +312,19 @@ canvas.addEventListener(
 );
 
 // Space and A are followed for Space + Ctrl+A (selects what touches the screen), pressed in any order. R is the
-// turning key: while it is held, the mouse turns the view, and H, G and Space do something else.
+// turning key: while it is held, the mouse turns the view, and H, G and Space do something else. F is the
+// mirror key: with H or V, it mirrors the selection.
 let spaceDown = false;
 let aDown = false;
 let rDown = false;
+let fDown = false;
+
+/** The objects changed: save them and draw them again. */
+function edited(count: number): void {
+  if (count === 0) return;
+  changed();
+  invalidate();
+}
 
 function select(report: SelectionReport): void {
   showSelected(report);
@@ -331,6 +342,7 @@ window.addEventListener("keydown", (event) => {
   } else if (event.key === "Escape") {
     hideMessage();
     editor.cancel();
+    changed(); // a selection being turned is put back
     invalidate();
   } else if (event.key === "Alt") {
     event.preventDefault(); // Alt+click takes the object below: Alt must not open the menu bar (Firefox) or focus the browser menu
@@ -340,12 +352,21 @@ window.addEventListener("keydown", (event) => {
       editor.setTurnKeyHeld(true);
     }
   } else if (rDown && (event.key.toLowerCase() === "h" || event.key.toLowerCase() === "g")) {
-    // with Shift, a quarter turn of the view: H clockwise, G the other way (without Shift, H and G will turn the selection)
-    if (event.shiftKey && !event.repeat) {
-      editor.turnView(event.key.toLowerCase() === "h" ? 90 : -90);
-      changed();
-      invalidate();
+    // a quarter turn, H clockwise, G the other way: of the selection; of the view with Shift, or without a selection
+    if (!event.repeat) {
+      const degrees = event.key.toLowerCase() === "h" ? 90 : -90;
+      if (event.shiftKey || editor.selection.size === 0) {
+        editor.turnView(degrees);
+        edited(1);
+      } else {
+        edited(editor.turnSelection(degrees));
+      }
     }
+  } else if (!ctrl && event.key.toLowerCase() === "f") {
+    fDown = true;
+  } else if (fDown && (event.key.toLowerCase() === "h" || event.key.toLowerCase() === "v")) {
+    // a mirror of the selection, as seen on the screen: H from left to right, V from top to bottom
+    if (!event.repeat) edited(editor.mirrorSelection(event.key.toLowerCase() === "h" ? "leftRight" : "topBottom"));
   } else if (event.code === "Space") {
     editor.setSpaceHeld(true);
     spaceDown = true;
@@ -419,14 +440,16 @@ window.addEventListener("keyup", (event) => {
     rDown = false;
     editor.setTurnKeyHeld(false);
   }
+  if (!event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "f") fDown = false;
   if (event.code === "Space") {
     editor.setSpaceHeld(false);
     spaceDown = false;
-    // R + Space: the view turns back straight (with a selection, the selection will take the angle of the view)
-    if (rDown && editor.selection.size === 0) {
+    // R + Space: each selected object looks straight on the screen; without a selection, the view turns back straight
+    if (rDown && editor.selection.size > 0) {
+      edited(editor.alignSelection());
+    } else if (rDown) {
       editor.straightenView();
-      changed();
-      invalidate();
+      edited(1);
     }
   }
   if (event.code === "Backquote") {
@@ -441,6 +464,7 @@ window.addEventListener("blur", () => {
   editor.setDrawKeyHeld(false);
   editor.setTurnKeyHeld(false);
   rDown = false;
+  fDown = false;
   spaceDown = false;
   aDown = false;
   changed();

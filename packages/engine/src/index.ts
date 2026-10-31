@@ -20,7 +20,6 @@ export {
 } from "./dyadic";
 export {
   type Section,
-  type SectionProjection,
   type LocalPoint,
   type Stroke,
   type StrokeJSON,
@@ -28,9 +27,7 @@ export {
   STROKE_FORMAT_VERSION,
   StrokeRecorder,
   convertWidth,
-  localToScreen,
   pointWorld,
-  projectSection,
   strokeFromJSON,
   strokeToJSON,
   strokeWorldPoints,
@@ -41,13 +38,36 @@ export {
   type Group,
   type Item,
   type ItemJSON,
+  type PlacedStroke,
+  type TransformJSON,
   DRAWING_FORMAT,
   DRAWING_FORMAT_VERSION,
   drawingFromJSON,
   drawingToJSON,
   isGroup,
   itemStrokes,
+  withTransform,
 } from "./drawing";
+export {
+  type Transform,
+  type TransformOptions,
+  IDENTITY,
+  applyTransform,
+  composeTransforms,
+  createTransform,
+  isIdentity,
+  mirroredAcross,
+  turnedAround,
+} from "./transform";
+export {
+  type PlacedSection,
+  type SectionProjection,
+  localToScreen,
+  placeSection,
+  placedAlone,
+  placedSections,
+  projectSection,
+} from "./placement";
 export { type OutlinePoint, type PathCommand, strokeOutline } from "./outline";
 export {
   type DrawableSection,
@@ -63,16 +83,20 @@ export {
 export {
   type OrientedRectangle,
   type RectangleMode,
+  type RectangleOnScreen,
   type ScreenBounds,
   type WorldBounds,
   boundsFromCorners,
   boundsOf,
   itemBounds,
+  itemFrame,
   itemsAt,
   itemsInRectangle,
   orientedRectangle,
+  rectangleCenter,
+  rectangleOnScreen,
+  selectionFrame,
   unionBounds,
-  viewBounds,
   worldRectangle,
 } from "./hit";
 export {
@@ -86,6 +110,7 @@ export {
   createCamera,
   log2Scale,
   normalizeAngle,
+  normalizeZoom,
   pan,
   rotateAt,
   scale,

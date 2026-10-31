@@ -17,8 +17,12 @@ at any zoom depth, objects, z-index, save and load.
 
 - `src/outline.ts`: the outline of a stroke whose thickness changes from point to point (the union of tapered
   capsules), as plain path commands.
-- `src/drawing.ts`: the objects of a drawing (strokes and nested groups) and its JSON form
-  (specified in [docs/drawing-format.md](../../docs/drawing-format.md)).
+- `src/drawing.ts`: the objects of a drawing (strokes and nested groups, each with an optional transform) and
+  its JSON form (specified in [docs/drawing-format.md](../../docs/drawing-format.md)).
+- `src/transform.ts`: where an object is placed: a similarity (turn, scale, mirror) around an exact pivot near
+  the object, then an exact position.
+- `src/placement.ts`: the sections of an object where its transforms put them, and their projection to the
+  screen.
 - `src/render.ts`: the `Renderer` interface a drawing library implements, the `Scene` it draws (selection
   included), and `selectDrawableSections`, which chooses what is worth drawing for a camera.
 - `src/hit.ts`: the objects under a point of the screen (what is drawn there), and the objects in a rectangle

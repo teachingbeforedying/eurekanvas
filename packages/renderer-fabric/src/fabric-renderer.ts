@@ -2,18 +2,19 @@ import { Color, type FabricObject, Path, Rect, StaticCanvas, util } from "fabric
 import {
   type PathCommand,
   type Renderer,
+  type PlacedSection,
+  type RectangleOnScreen,
   type Scene,
   type ScreenBounds,
   type Section,
   type SectionProjection,
-  type Stroke,
-  type Turn,
   type Viewport,
+  rectangleOnScreen,
   selectDrawableSections,
   strokeOutline,
   turnOf,
   turned,
-  viewBounds,
+  unturned,
 } from "@eurekanvas/engine";
 
 export interface FabricRendererOptions {
@@ -63,26 +64,23 @@ function toPathData(commands: readonly PathCommand[]): PathData {
  * Draws strokes with fabric.js, on a static canvas (fabric's own selection and controls are not used: the
  * selection comes with the scene).
  *
- * Each section of a stroke becomes one fabric `Path`, drawn in the section's own local units and placed
- * on the screen by a transformation relative to the camera. A section is immutable, so its `Path` is
- * built once and kept for as long as the section object lives; only its transformation and its colour
- * change. The selected strokes are drawn in the selection colour, with one dashed frame around them all, and
- * the rectangle being dragged to select is drawn on top.
+ * Each placed section of a stroke becomes one fabric `Path`, drawn in the section's own local units and placed
+ * on the screen by a transformation relative to the camera (with the turn and the mirror of its object). The
+ * outline of a section is computed once for as long as the section object lives, and its `Path` once for as
+ * long as the placed section lives; only the transformation and the colour change. The selected sections are
+ * drawn in the selection colour, with one dashed frame around the selection, and the rectangle being dragged to
+ * select is drawn on top.
  */
 export class FabricRenderer implements Renderer {
   private readonly canvas: StaticCanvas;
-  private readonly paths = new WeakMap<Section, Path>();
+  private readonly outlines = new WeakMap<Section, PathData>();
+  private readonly paths = new WeakMap<PlacedSection, Path>();
   private readonly color: string;
   private readonly selectionColor: string;
   private readonly touchingColor: string;
   private readonly maxLevelGap: number | undefined;
   private readonly frame: Rect;
   private readonly band: Rect;
-  /** The sections of the selected strokes, remembered for the set of strokes they come from. */
-  private selectedSections: { readonly from: ReadonlySet<Stroke> | undefined; readonly sections: ReadonlySet<Section> } = {
-    from: undefined,
-    sections: new Set(),
-  };
   private shown: FabricObject[] = [];
   private drawn = 0;
 
@@ -113,26 +111,20 @@ export class FabricRenderer implements Renderer {
 
   render(scene: Scene): void {
     const options = this.maxLevelGap === undefined ? {} : { maxLevelGap: this.maxLevelGap };
-    const drawable = selectDrawableSections(scene.strokes, scene.camera, scene.viewport, options);
-    const selected = this.sectionsOf(scene.selectedStrokes);
-    const next: FabricObject[] = drawable.map(({ section, projection }) => {
-      const path = this.pathFor(section);
+    const drawable = selectDrawableSections(scene.sections, scene.camera, scene.viewport, options);
+    const selected = scene.selectedSections;
+    const next: FabricObject[] = drawable.map(({ placed, projection }) => {
+      const path = this.pathFor(placed);
       place(path, projection);
-      path.set("fill", selected.has(section) ? this.selectionColor : this.color);
+      path.set("fill", selected?.has(placed) ? this.selectionColor : this.color);
       return path;
     });
     this.drawn = next.length;
 
-    if (scene.selectionBounds) {
-      // the frame follows the axes of the drawing: it turns with the view
-      const box = viewBounds(scene.camera, scene.selectionBounds);
-      const padded = {
-        left: box.left - FRAME_PADDING,
-        top: box.top - FRAME_PADDING,
-        right: box.right + FRAME_PADDING,
-        bottom: box.bottom + FRAME_PADDING,
-      };
-      if (placeTurnedBox(this.frame, padded, turnOf(scene.camera.angle), scene.viewport)) next.push(this.frame);
+    if (scene.selectionFrame) {
+      // the frame follows the axes of the drawing, or of the selected object: it turns with them
+      const frame = rectangleOnScreen(scene.camera, scene.viewport, scene.selectionFrame);
+      if (placeFrame(this.frame, frame, scene.viewport)) next.push(this.frame);
     }
     if (scene.band) {
       const { from, to, mode } = scene.band;
@@ -152,24 +144,21 @@ export class FabricRenderer implements Renderer {
     this.canvas.renderAll();
   }
 
-  private sectionsOf(strokes: ReadonlySet<Stroke> | undefined): ReadonlySet<Section> {
-    if (this.selectedSections.from !== strokes) {
-      const sections = new Set<Section>();
-      for (const stroke of strokes ?? []) for (const section of stroke.sections) sections.add(section);
-      this.selectedSections = { from: strokes, sections };
-    }
-    return this.selectedSections.sections;
-  }
-
   dispose(): void {
     this.shown = [];
     void this.canvas.dispose();
   }
 
-  private pathFor(section: Section): Path {
-    const known = this.paths.get(section);
+  private pathFor(placed: PlacedSection): Path {
+    const known = this.paths.get(placed);
     if (known !== undefined) return known;
-    const path = new Path(toPathData(strokeOutline(section.points)), {
+    const { section } = placed;
+    let outline = this.outlines.get(section);
+    if (outline === undefined) {
+      outline = toPathData(strokeOutline(section.points));
+      this.outlines.set(section, outline);
+    }
+    const path = new Path(outline, {
       fill: this.color,
       stroke: null,
       strokeWidth: 0,
@@ -177,24 +166,26 @@ export class FabricRenderer implements Renderer {
       selectable: false,
       evented: false,
     });
-    this.paths.set(section, path);
+    this.paths.set(placed, path);
     return path;
   }
 }
 
 /**
- * Places a section's path so that its local point `(x, y)` lands at `origin + R · (x, y) * scale`, `R` being
- * the view's turn. A fabric `Path` draws its coordinates minus `pathOffset` (the centre of its box) around its
- * own centre, and `applyTransformToObject` positions the object by that centre.
+ * Places a section's path so that its local point `(x, y)` lands at `origin + R · M · (x, y) * scale`, `R` being
+ * the turn of the view and of the object, `M` its mirror. A fabric `Path` draws its coordinates minus
+ * `pathOffset` (the centre of its box) around its own centre, and `applyTransformToObject` positions the object by
+ * that centre.
  */
 function place(path: Path, projection: SectionProjection): void {
-  const { origin, scale, turn } = projection;
-  const centre = turned(turn, path.pathOffset.x * scale, path.pathOffset.y * scale);
+  const { origin, scale, turn, mirror } = projection;
+  const m = mirror ? -1 : 1;
+  const centre = turned(turn, path.pathOffset.x * scale, m * path.pathOffset.y * scale);
   util.applyTransformToObject(path, [
     turn.cos * scale,
     turn.sin * scale,
-    -turn.sin * scale,
-    turn.cos * scale,
+    -turn.sin * scale * m,
+    turn.cos * scale * m,
     origin.x + centre.x,
     origin.y + centre.y,
   ]);
@@ -202,24 +193,32 @@ function place(path: Path, projection: SectionProjection): void {
 }
 
 /**
- * Places a rectangle given along the axes of the drawing, in pixels from the middle of the screen (see
- * `viewBounds`), turned with the view around the middle. In a straight view its 1-pixel line lies on whole
- * pixels. A side far beyond the screen is drawn just outside it, since the canvas computes with single
- * precision. Returns `false` when the rectangle cannot be seen.
+ * Places the dashed frame around a selection, at its angle, a few pixels away from the ink. In a straight frame,
+ * its 1-pixel line lies on whole pixels. A side far beyond the screen is drawn just outside it, since the canvas
+ * computes with single precision. Returns `false` when the frame cannot be seen.
  */
-function placeTurnedBox(rect: Rect, box: ScreenBounds, turn: Turn, viewport: Viewport): boolean {
+function placeFrame(rect: Rect, frame: RectangleOnScreen, viewport: Viewport): boolean {
+  const { center, angle } = frame;
+  if (!(Number.isFinite(center.x) && Number.isFinite(center.y))) return false;
+  const turn = turnOf(angle);
   const middle = { x: viewport.width / 2, y: viewport.height / 2 };
-  const reach = Math.hypot(middle.x, middle.y) + OFF_SCREEN_MARGIN; // the screen is this close to the middle, whatever the turn
-  if (box.right < -reach || box.left > reach || box.bottom < -reach || box.top > reach) return false;
-  // a line centred on a half pixel covers whole pixels
-  const side = (value: number, centre: number): number => Math.round(centre + Math.min(reach, Math.max(-reach, value))) + 0.5 - centre;
-  const left = side(box.left, middle.x);
-  const right = side(box.right, middle.x);
-  const top = side(box.top, middle.y);
-  const bottom = side(box.bottom, middle.y);
-  const centre = turned(turn, (left + right) / 2, (top + bottom) / 2);
+  const reach = Math.hypot(middle.x, middle.y) + OFF_SCREEN_MARGIN; // the screen is this close to its middle, whatever the turn
+  const seen = unturned(turn, middle.x - center.x, middle.y - center.y); // the middle of the screen, along the frame's sides
+  const halfWidth = frame.width / 2 + FRAME_PADDING;
+  const halfHeight = frame.height / 2 + FRAME_PADDING;
+  let left = Math.max(-halfWidth, seen.x - reach);
+  let right = Math.min(halfWidth, seen.x + reach);
+  let top = Math.max(-halfHeight, seen.y - reach);
+  let bottom = Math.min(halfHeight, seen.y + reach);
+  if (left > right || top > bottom) return false;
+  if (angle === 0) {
+    // a line centred on a half pixel covers whole pixels
+    const snap = (side: number, at: number): number => Math.round(at + side) + 0.5 - at;
+    [left, right, top, bottom] = [snap(left, center.x), snap(right, center.x), snap(top, center.y), snap(bottom, center.y)];
+  }
+  const shift = turned(turn, (left + right) / 2, (top + bottom) / 2);
   rect.set({ width: right - left, height: bottom - top });
-  util.applyTransformToObject(rect, [turn.cos, turn.sin, -turn.sin, turn.cos, middle.x + centre.x, middle.y + centre.y]);
+  util.applyTransformToObject(rect, [turn.cos, turn.sin, -turn.sin, turn.cos, center.x + shift.x, center.y + shift.y]);
   rect.setCoords();
   return true;
 }

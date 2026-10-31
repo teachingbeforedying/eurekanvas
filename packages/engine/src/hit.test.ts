@@ -9,7 +9,7 @@ import {
   itemsAt,
   itemsInRectangle,
   orientedRectangle,
-  viewBounds,
+  rectangleOnScreen,
   worldRectangle,
 } from "./hit";
 import { type Stroke, StrokeRecorder } from "./stroke";
@@ -218,9 +218,9 @@ describe("itemBounds", () => {
     expect(itemBounds({ sections: [] })).toBeNull();
   });
 
-  it("lies in the view along the world's axes, in pixels from the middle of the screen", () => {
-    expect(viewBounds(camera, rect(0, 0, 10, 20))).toEqual({ left: 0, top: 0, right: 10, bottom: 20 });
-    const zoomed = createCamera({ center: pt(5, 5), zLevel: 1, angle: 30 }); // the angle is left to the renderer
-    expect(viewBounds(zoomed, rect(0, 0, 10, 20))).toEqual({ left: -10, top: -10, right: 10, bottom: 30 });
+  it("appears on the screen with its center, its size and the angle of its sides", () => {
+    expect(rectangleOnScreen(camera, viewport, area(0, 0, 10, 20))).toEqual({ center: { x: 645, y: 370 }, width: 10, height: 20, angle: 0 });
+    const zoomed = createCamera({ center: pt(5, 10), zLevel: 1, angle: 90 });
+    expect(rectangleOnScreen(zoomed, viewport, area(0, 0, 10, 20))).toEqual({ center: { x: 640, y: 360 }, width: 20, height: 40, angle: 90 });
   });
 });

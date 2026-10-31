@@ -108,7 +108,7 @@ function assertScreenPoint(p: ScreenPoint): void {
 }
 
 /** Brings a zoom `2^zLevel * factor` to its canonical form: `factor` in [1, 2), `zLevel` an integer. */
-function normalizeZoom(zLevel: number, factor: number): { zLevel: number; factor: number } {
+export function normalizeZoom(zLevel: number, factor: number): { zLevel: number; factor: number } {
   if (!Number.isInteger(zLevel)) throw new RangeError(`zLevel must be an integer, got ${zLevel}`);
   if (!(Number.isFinite(factor) && factor > 0)) throw new RangeError(`zoom factor must be positive and finite, got ${factor}`);
   // Multiplying or dividing by 2 is exact, so the factor loses nothing here.

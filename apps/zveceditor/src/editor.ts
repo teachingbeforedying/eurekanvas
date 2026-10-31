@@ -1,28 +1,44 @@
 import {
   type Camera,
   type Drawing,
+  type Group,
   type Item,
+  ORIGIN,
+  type OrientedRectangle,
+  type PlacedSection,
   type Point,
   type RectangleMode,
   type Scene,
   type ScreenPoint,
   type SelectionBand,
   type Stroke,
+  type Transform,
   type Viewport,
-  type WorldBounds,
   StrokeRecorder,
-  boundsOf,
+  add,
+  composeTransforms,
   createCamera,
+  createTransform,
   isGroup,
+  itemBounds,
+  itemFrame,
   itemStrokes,
   itemsAt,
   itemsInRectangle,
+  mirroredAcross,
   orientedRectangle,
   pan,
+  placedAlone,
+  placedSections,
+  rectangleCenter,
   rotateAt,
   screenToWorld,
   selectDrawableSections,
+  selectionFrame,
+  shift,
   shortestAngle,
+  turnedAround,
+  withTransform,
   worldToScreen,
   zoomAt,
 } from "@eurekanvas/engine";
@@ -119,6 +135,29 @@ export function wheelZoomFactor(deltaY: number): number {
   return 1 + amount;
 }
 
+/**
+ * The transform of an object; for one without, the identity around the center of its box, so that it turns
+ * around a point near itself: the precision of a turn is relative to the distance from its pivot.
+ */
+function transformOf(item: Item): Transform {
+  if (item.transform !== undefined) return item.transform;
+  const bounds = itemBounds(item);
+  const center = bounds === null ? ORIGIN : { x: shift(add(bounds.minX, bounds.maxX), -1), y: shift(add(bounds.minY, bounds.maxY), -1) };
+  return createTransform({ origin: center });
+}
+
+/** The object turned by `degrees`, clockwise on the screen, around the exact world point `center`. */
+function turnedItem(item: Item, center: Point, degrees: number): Item {
+  return withTransform(item, turnedAround(transformOf(item), center, degrees));
+}
+
+/** The objects of a group, where the group put them: each one takes the group's transform before its own. */
+function openGroup(group: Group): readonly Item[] {
+  const outer = group.transform;
+  if (outer === undefined) return group.items;
+  return group.items.map((member) => withTransform(member, member.transform === undefined ? outer : composeTransforms(outer, member.transform)));
+}
+
 /** As in AutoCAD: a rectangle dragged from left to right takes what is inside it, from right to left what it touches. */
 function rectangleMode(from: ScreenPoint, to: ScreenPoint): RectangleMode {
   return from.x <= to.x ? "inside" : "touching";
@@ -162,8 +201,12 @@ export class Editor {
   private finished: readonly Item[] = [];
   /** The objects before each action (a stroke, an added drawing, a clear...), for `undo`. */
   private readonly history: (readonly Item[])[] = [];
-  /** The strokes of `finished`, flattened for the scene, remembered for the `finished` they come from. */
-  private flat: { readonly from: readonly Item[]; readonly strokes: readonly Stroke[] } = { from: [], strokes: [] };
+  /** The strokes and the placed sections of `finished`, flattened for the scene, remembered for the `finished` they come from. */
+  private flat: { readonly from: readonly Item[]; readonly strokes: readonly Stroke[]; readonly sections: readonly PlacedSection[] } = {
+    from: [],
+    strokes: [],
+    sections: [],
+  };
   private recorder: StrokeRecorder | null = null;
   private drawKeyHeld = false;
   /**
@@ -188,12 +231,24 @@ export class Editor {
   private turning: { start: number; swept: number; at: number } | null = null;
   /** Top-level objects of the drawing. A new set at every change. */
   private _selection: ReadonlySet<Item> = new Set();
-  /** The strokes and the box of the selection, remembered for the selection they come from. */
+  /** The placed sections and the frame of the selection, remembered for the selection they come from. */
   private selectionShape: {
     readonly from: ReadonlySet<Item>;
-    readonly strokes: ReadonlySet<Stroke>;
-    readonly bounds: WorldBounds | null;
-  } = { from: new Set(), strokes: new Set(), bounds: null };
+    readonly sections: ReadonlySet<PlacedSection>;
+    readonly frame: OrientedRectangle | null;
+  } = { from: new Set(), sections: new Set(), frame: null };
+  /**
+   * The selection being turned by the pointer, with the turning key and the primary button: around the exact
+   * center of its frame, from the objects as they were when the button was pressed. `swept` is the angle the
+   * pointer has swept around the center, `done` the angle the objects are turned by now.
+   */
+  private turningSelection: {
+    readonly center: Point;
+    readonly before: readonly Item[];
+    readonly selected: readonly Item[];
+    swept: number;
+    done: number;
+  } | null = null;
 
   constructor(viewport: Viewport) {
     this._viewport = viewport;
@@ -217,22 +272,33 @@ export class Editor {
     return this._selection;
   }
 
-  /** What to draw: the strokes of the objects, then the one being drawn; the selection and the rectangle being dragged. */
+  /**
+   * What to draw: the sections of the objects where they put them, then the stroke being drawn; the selection, its
+   * frame, and the rectangle being dragged.
+   */
   get scene(): Scene {
-    if (this.flat.from !== this.finished) this.flat = { from: this.finished, strokes: this.finished.flatMap(itemStrokes) };
-    if (this.selectionShape.from !== this._selection) {
-      const items = [...this._selection];
-      this.selectionShape = { from: this._selection, strokes: new Set(items.flatMap(itemStrokes)), bounds: boundsOf(items) };
+    if (this.flat.from !== this.finished) {
+      this.flat = { from: this.finished, strokes: this.finished.flatMap(itemStrokes), sections: this.finished.flatMap(placedSections) };
     }
+    const shape = this.shapeOfSelection();
     const current = this.recorder?.stroke;
     return {
       camera: this._camera,
       viewport: this._viewport,
+      sections: current === undefined ? this.flat.sections : [...this.flat.sections, ...current.sections.map(placedAlone)],
       strokes: current === undefined ? this.flat.strokes : [...this.flat.strokes, current],
-      selectedStrokes: this.selectionShape.strokes,
-      selectionBounds: this.selectionShape.bounds,
+      selectedSections: shape.sections,
+      selectionFrame: shape.frame,
       band: this.band,
     };
+  }
+
+  private shapeOfSelection(): { readonly sections: ReadonlySet<PlacedSection>; readonly frame: OrientedRectangle | null } {
+    if (this.selectionShape.from !== this._selection) {
+      const items = [...this._selection];
+      this.selectionShape = { from: this._selection, sections: new Set(items.flatMap(placedSections)), frame: selectionFrame(items) };
+    }
+    return this.selectionShape;
   }
 
   /** The rectangle being dragged to select, on the screen, or `null`. */
@@ -288,7 +354,11 @@ export class Editor {
         return;
       }
       if (!this.drawKeyHeld) {
-        if (this.turning) return; // the turning key is held: the pointer turns the view, and does not select
+        if (this.turning) {
+          // the turning key is held: the button turns the selection, and does not select
+          this.startTurningSelection();
+          return;
+        }
         // the drawing key must be held before the press to draw: without it, the button selects
         this.press = {
           start: screenToWorld(this._camera, this._viewport, p),
@@ -311,7 +381,9 @@ export class Editor {
   pointerMove(p: ScreenPoint, time = performance.now(), modifiers: Modifiers = {}): void {
     const dx = p.x - this.last.x;
     const dy = p.y - this.last.y;
-    if (this.turning) {
+    if (this.turningSelection) {
+      this.turnSelectionByPointer(p, modifiers.shift === true);
+    } else if (this.turning) {
       this.turnByPointer(p, modifiers.shift === true);
     } else if (this.isMovingView) {
       this._camera = pan(this._camera, dx, dy);
@@ -346,6 +418,12 @@ export class Editor {
       this.recorder = null;
       if (this.hold) this.hold.count += 1;
       if (!this.drawKeyHeld) this.endHold(); // the key was released during the stroke
+      return null;
+    }
+    const turning = this.turningSelection;
+    if (turning) {
+      this.turningSelection = null;
+      if (turning.done !== 0) this.history.push(turning.before); // the whole gesture is one action
       return null;
     }
     const press = this.press;
@@ -425,8 +503,18 @@ export class Editor {
     return this.report();
   }
 
-  /** Escape: drops the rectangle being dragged, if any; otherwise deselects everything. */
+  /**
+   * Escape: puts the selection back as it was if the pointer is turning it; drops the rectangle being dragged, if
+   * any; otherwise deselects everything.
+   */
   cancel(): void {
+    const turning = this.turningSelection;
+    if (turning) {
+      this.turningSelection = null;
+      this.setItems(turning.before);
+      this.select(turning.selected);
+      return;
+    }
     if (this.press?.dragging) {
       this.press = null;
       return;
@@ -476,12 +564,97 @@ export class Editor {
     if (this.isDrawing) return 0;
     this.interruptHold();
     const selected = this._selection;
-    const groups = [...selected].filter(isGroup).length;
-    if (groups === 0) return 0;
-    const open = (item: Item): readonly Item[] => (isGroup(item) ? item.items : [item]);
-    this.commit(this.finished.flatMap((item) => (selected.has(item) ? open(item) : [item])));
-    this.select([...selected].flatMap(open));
-    return groups;
+    const opened = new Map<Item, readonly Item[]>();
+    for (const item of selected) if (isGroup(item)) opened.set(item, openGroup(item));
+    if (opened.size === 0) return 0;
+    this.commit(this.finished.flatMap((item) => opened.get(item) ?? [item]));
+    this.select([...selected].flatMap((item) => opened.get(item) ?? [item]));
+    return opened.size;
+  }
+
+  /**
+   * Turns the selection by `degrees`, clockwise on the screen, as one block around the center of its frame. One
+   * action. Returns how many objects turned; 0, doing nothing, with nothing selected or while drawing.
+   */
+  turnSelection(degrees: number): number {
+    const center = this.selectionCenter();
+    if (center === null) return 0;
+    return this.changeSelected((item) => turnedItem(item, center, degrees));
+  }
+
+  /**
+   * Mirrors the selection around the center of its frame: from left to right or from top to bottom, as seen on the
+   * screen. One action. Returns how many objects; 0, doing nothing, with nothing selected or while drawing.
+   */
+  mirrorSelection(direction: "leftRight" | "topBottom"): number {
+    const center = this.selectionCenter();
+    if (center === null) return 0;
+    // the line, vertical or horizontal on the screen, in the world's axes
+    const line = (direction === "leftRight" ? 90 : 0) - this._camera.angle;
+    return this.changeSelected((item) => withTransform(item, mirroredAcross(transformOf(item), center, line)));
+  }
+
+  /**
+   * Turns each selected object around the center of its own frame until it looks straight on the screen (in a
+   * straight view: puts it back straight). Its mirror stays. One action. Returns how many objects turned; 0, doing
+   * nothing, when none had to, or while drawing.
+   */
+  alignSelection(): number {
+    if (this.selectionCenter() === null) return 0;
+    const turns = new Map<Item, number>();
+    for (const item of this._selection) {
+      const degrees = shortestAngle(-this._camera.angle - (item.transform?.angle ?? 0));
+      if (degrees !== 0) turns.set(item, degrees);
+    }
+    if (turns.size === 0) return 0;
+    this.changeSelected((item) => {
+      const degrees = turns.get(item);
+      const frame = itemFrame(item);
+      return degrees === undefined || frame === null ? item : turnedItem(item, rectangleCenter(frame), degrees);
+    });
+    return turns.size;
+  }
+
+  /** The exact center of the frame of the selection, after ending a hold of the drawing key; `null` when nothing can be changed. */
+  private selectionCenter(): Point | null {
+    if (this.isDrawing || this.turningSelection) return null;
+    this.interruptHold();
+    const frame = this.shapeOfSelection().frame;
+    return frame === null ? null : rectangleCenter(frame);
+  }
+
+  /** Replaces each selected object by `change(object)`, as one action, and selects the results. */
+  private changeSelected(change: (item: Item) => Item): number {
+    const changed = new Map([...this._selection].map((item) => [item, change(item)]));
+    this.commit(this.finished.map((item) => changed.get(item) ?? item));
+    this.select(changed.values());
+    return changed.size;
+  }
+
+  /** The primary button was pressed with the turning key: the pointer will turn the selection around the center of its frame. */
+  private startTurningSelection(): void {
+    if (this._selection.size === 0) return;
+    const frame = this.shapeOfSelection().frame;
+    if (frame === null) return;
+    this.turningSelection = { center: rectangleCenter(frame), before: this.finished, selected: [...this._selection], swept: 0, done: 0 };
+  }
+
+  /** As `turnByPointer`, around the center of the selection's frame; with `steps`, by steps of the angle turned. */
+  private turnSelectionByPointer(p: ScreenPoint, steps: boolean): void {
+    const turning = this.turningSelection;
+    if (turning === null) return;
+    const center = worldToScreen(this._camera, this._viewport, turning.center);
+    const from = { x: this.last.x - center.x, y: this.last.y - center.y };
+    const to = { x: p.x - center.x, y: p.y - center.y };
+    if (Math.hypot(from.x, from.y) < TURN_DEAD_ZONE_PIXELS || Math.hypot(to.x, to.y) < TURN_DEAD_ZONE_PIXELS) return;
+    turning.swept += shortestAngle(((Math.atan2(to.y, to.x) - Math.atan2(from.y, from.x)) * 180) / Math.PI);
+    const done = steps ? Math.round(turning.swept / TURN_STEP_DEGREES) * TURN_STEP_DEGREES : turning.swept;
+    if (done === turning.done) return;
+    turning.done = done;
+    // from the objects as they were, so that nothing adds up
+    const turned = new Map(turning.selected.map((item) => [item, turnedItem(item, turning.center, done)]));
+    this.setItems(turning.before.map((item) => turned.get(item) ?? item));
+    this.select(turned.values());
   }
 
   private select(items: Iterable<Item>): void {
@@ -491,7 +664,7 @@ export class Editor {
   private report(): SelectionReport {
     let notVisible = 0;
     for (const item of this._selection) {
-      if (selectDrawableSections(itemStrokes(item), this._camera, this._viewport).length === 0) notVisible += 1;
+      if (selectDrawableSections(placedSections(item), this._camera, this._viewport).length === 0) notVisible += 1;
     }
     return { count: this._selection.size, notVisible };
   }

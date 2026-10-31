@@ -370,6 +370,12 @@ Sébastien veut la rotation tôt : dans l'ancienne version, il l'avait faite tar
 
 **Choix techniques à prévoir** : les angles en degrés, pour que les quarts de tour soient exacts (cos et sin valent alors exactement 0 ou ±1) ; les différences de positions exactes restent calculées avant d'être tournées.
 
+**Précisions pour les objets** (2026-10-31) :
+- `R`+`H`, `R`+`G` et `R` + bouton gauche tournent toute la sélection d'un bloc, autour du centre de son cadre, comme Inkscape. Sans sélection, `R`+`H` et `R`+`G` tournent la vue, comme `R` + relâcher `Espace` la redresse. Avec Maj, la rotation libre avance par crans de 15° de la rotation faite (pas de l'angle des objets).
+- Un seul objet tourné sélectionné : son cadre suit son angle propre. Plusieurs objets : le cadre suit les axes du dessin.
+- Le miroir vient dans cette livraison, comme avant : `F`+`H` retourne la sélection de gauche à droite, `F`+`V` de haut en bas, autour du centre de son cadre (L75742, L76271 dans l'ancienne version).
+- `R` + relâcher `Espace` avec une sélection : chaque objet tourne sur place, autour de son propre centre, jusqu'à apparaître droit à l'écran (vue droite : il est remis droit). Le miroir n'est pas touché. C'est la seule exception au « tout en bloc ».
+
 ## Étape 1 de la sélection : groupes, touche `²`, interface (2026-10-25)
 
 - **Objets** (`packages/engine/src/drawing.ts`) : `Item = Stroke | Group`, avec des groupes emboîtables.
@@ -454,6 +460,42 @@ Toutes sont tuées ensuite.
 - l'angle est dans la sauvegarde automatique ; aucune erreur après rechargement.
 
 **Contrôle par mutation** : 24 modifications volontaires, 23 tuées. La survivante saute le raccourci « boîte entièrement dans le rectangle » : elle est équivalente, puisque le test fin donne alors la même réponse.
+
+## Rotation, deuxième livraison : les objets (2026-10-31)
+
+- **Transformation** (`packages/engine/src/transform.ts`) : `T(p) = position + 2^zLevel · factor · R(angle) · M · (p − origin)`.
+  - `origin` est un pivot exact dans les coordonnées du tracé, et `position` l'endroit exact où il arrive.
+  - L'échelle s'écrit comme celle de la caméra. L'angle est en degrés, exact pour les quarts de tour. `M` est le miroir haut-bas, appliqué avant la rotation.
+  - Chaque produit d'une différence exacte par un cosinus, un sinus ou un facteur est exact (un `number` est un dyadique). La transformation ne perd que l'arrondi de ses propres coefficients.
+  - **Le pivot doit être près de l'objet.** Deux rotations successives calculent `R(a + b)` au lieu de `R(b) · R(a)` : l'écart, de l'ordre de 1e-16, est multiplié par la distance au pivot. Un pivot à l'origine du monde ferait sauter un objet situé 600 niveaux plus bas dès la deuxième rotation. Un objet qui reçoit sa première transformation prend donc pour pivot le centre de sa boîte. Le test en profondeur le vérifie, et la mutation « pivot à l'origine » le fait échouer.
+  - Composer, tourner autour d'un point et faire un miroir le long d'une droite (`composeTransforms`, `turnedAround`, `mirroredAcross`) restent exacts pour les coefficients arrondis. Quatre quarts de tour, ou deux miroirs le long d'une droite verticale ou horizontale, redonnent exactement la même transformation.
+- **Objets** (`packages/engine/src/drawing.ts`) : un trait ou un groupe peut porter une `transform`. Un trait garde les coordonnées de son tracé.
+- **Sections placées** (`packages/engine/src/placement.ts`) : chaque section, avec la transformation de son objet et de ses groupes composée, devient une section placée.
+  - Son ancrage est exact. Son niveau effectif est `zLevel − T.zLevel`. Elle a son facteur, son angle et son miroir.
+  - Le rendu, le choix de ce qu'on dessine, le clic, le rectangle et les boîtes travaillent tous sur les sections placées. La projection, déplacée de `stroke.ts`, combine l'angle de la vue et celui de l'objet.
+- **Cadres** : un seul objet transformé sélectionné a un cadre selon ses axes propres (`itemFrame`, un `OrientedRectangle` exact). Sinon, le cadre suit les axes du dessin. `rectangleOnScreen` donne au rendu son centre, sa taille et son angle à l'écran.
+- **Format version 3** : `transform` facultatif sur chaque objet ([drawing-format.md](./drawing-format.md)). Les versions 1 et 2 se lisent toujours. Un lecteur de la version 2 dessinerait mal les objets transformés : d'où le changement de version.
+- **Éditeur** :
+  - `R`+`H` / `R`+`G` : un quart de tour de la sélection, d'un bloc, autour du centre de son cadre. Avec Maj, ou sans sélection, un quart de tour de la vue (demande de Sébastien après essai : sans sélection, `R`+`H` ne faisait rien, comme dans l'ancienne version).
+  - `R` + bouton gauche : le pointeur tourne la sélection autour de ce centre, comme la vue. Maj avance par crans de 15° de la rotation faite. Tout le geste est une seule action. `Échap` remet tout en place. La vue ne tourne pas pendant ce geste.
+  - `F`+`H` / `F`+`V` : miroir gauche-droite ou haut-bas, tels qu'on les voit à l'écran, autour du centre du cadre.
+  - `R` + relâcher `Espace` avec une sélection : chaque objet tourne autour de son propre centre jusqu'à paraître droit à l'écran. Sans sélection, la vue revient droite.
+  - Maj+G crée un groupe sans transformation. Maj+B donne à chaque objet libéré la transformation du groupe composée avec la sienne : rien ne bouge.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements synthétiques ; rendu forcé à la main, panneau caché) :
+- `R`+`H` tourne d'un quart de tour sans ouvrir le panneau ; `F`+`H` fait un miroir ;
+- `R` + bouton gauche tourne d'environ 30° sans tourner la vue, et un seul `Ctrl+Z` annule le geste ;
+- `R` + `Espace` redresse chaque objet ; grouper, tourner puis dégrouper compose les transformations ;
+- la sauvegarde automatique est en version 3 avec les transformations ; le cadre d'un objet tourné suit son angle ; aucune erreur.
+
+**Contrôle par mutation** : 32 modifications volontaires, toutes tuées à la fin. Au premier passage, 12 survivaient :
+- mon script ne lançait que les tests du moteur pour un fichier du moteur, alors que certains cas n'étaient testés que par l'application : désormais, tous les tests tournent ;
+- deux miroirs d'un segment centré donnent le même segment : le test du miroir dans une vue tournée trace un L ;
+- le test d'annulation du geste passait aussi sans action enregistrée, puisque `Ctrl+Z` retirait alors le trait ;
+- un seul tour en profondeur ne révèle pas un mauvais pivot : il en faut deux (voir plus haut) ;
+- il manquait des tests pour le miroir et le facteur dans le rendu, le clic et le rectangle, pour l'ordre de composition avec un groupe, et pour un objet déjà tourné dans un groupe qu'on défait.
+
+**Note** : mes scripts Python d'édition avaient écrit des fins de ligne CRLF dans cinq fichiers (Windows, mode texte). Elles sont remises en LF ; les scripts écrivent maintenant avec `newline=""`.
 
 ## Critères de réussite du tronçon
 

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { type Viewport, createCamera, zoomAt } from "./camera";
-import { type Drawing, type Item, drawingFromJSON, drawingToJSON, isGroup, itemStrokes } from "./drawing";
+import { type Drawing, type Item, drawingFromJSON, drawingToJSON, isGroup, itemStrokes, withTransform } from "./drawing";
 import { dyadic, fromNumber } from "./dyadic";
 import { type Stroke, StrokeRecorder, strokeToJSON } from "./stroke";
+import { createTransform } from "./transform";
 
 const viewport: Viewport = { width: 1280, height: 720 };
 
@@ -58,10 +59,47 @@ describe("drawing JSON form", () => {
     const stroke = small();
     expect(drawingToJSON({ items: [stroke, { items: [stroke] }], view: createCamera() })).toEqual({
       format: "eurekanvas/drawing",
-      version: 2,
+      version: 3,
       view: { center: { x: "0/2^0", y: "0/2^0" }, zLevel: 0, factor: 1, angle: 0 },
       items: [strokeToJSON(stroke), { group: [strokeToJSON(stroke)] }],
     });
+  });
+
+  it("keeps the transforms of strokes and groups, exactly, and writes none for an object without one", () => {
+    const center = { x: dyadic(5n, 900), y: dyadic(-3n, 2) }; // a pivot far deeper than a number could tell
+    const turned = withTransform(small(1), createTransform({ origin: center, position: { x: dyadic(7n, 3), y: dyadic(1n, 0) }, angle: 37.5, zLevel: -4, factor: 1.25 }));
+    const mirrored: Item = withTransform({ items: [turned, small(2)] }, createTransform({ origin: center, mirror: true, angle: 270 }));
+    const drawing: Drawing = { items: [mirrored, small(3)], view: createCamera() };
+    const json = JSON.parse(JSON.stringify(drawingToJSON(drawing)));
+    expect(drawingFromJSON(json)).toEqual(drawing);
+    expect(json.items[0].transform).toEqual({
+      origin: { x: "5/2^900", y: "-3/2^2" },
+      position: { x: "5/2^900", y: "-3/2^2" },
+      zLevel: 0,
+      factor: 1,
+      angle: 270,
+      mirror: true,
+    });
+    expect("transform" in json.items[1]).toBe(false);
+  });
+
+  it("rejects a transform that does not match the format", () => {
+    const good = { origin: { x: "0/2^0", y: "0/2^0" }, position: { x: "1/2^0", y: "0/2^0" }, zLevel: 0, factor: 1, angle: 0, mirror: false };
+    const broken: Record<string, unknown>[] = [
+      { ...good, origin: { x: 0, y: "0/2^0" } },
+      { ...good, position: "here" },
+      { ...good, zLevel: 0.5 },
+      { ...good, factor: 0 },
+      { ...good, angle: Number.NaN },
+      { ...good, mirror: "no" },
+    ];
+    const json = valid();
+    Object.assign(json.items[0] as object, { transform: good });
+    expect(drawingFromJSON(JSON.parse(JSON.stringify(json))).items[0]?.transform).toEqual(createTransform({ position: { x: dyadic(1n), y: dyadic(0n) } }));
+    for (const transform of broken) {
+      Object.assign(json.items[0] as object, { transform });
+      expect(() => drawingFromJSON(JSON.parse(JSON.stringify(json)))).toThrow(SyntaxError);
+    }
   });
 
   it("keeps the angle of the view, and reads a view without one as straight", () => {
@@ -106,7 +144,7 @@ describe("drawing JSON form", () => {
   it("rejects anything that does not match the format", () => {
     const rejected: Record<string, (json: ReturnType<typeof valid>) => void> = {
       "wrong format": (j) => void (j.format = "eurekanvas/stroke"),
-      "unknown version": (j) => void (j.version = 3),
+      "unknown version": (j) => void (j.version = 4),
       "no view": (j) => void delete (j as { view?: unknown }).view,
       "center that is not text": (j) => void (j.view.center.x = 3),
       "center that is not a dyadic": (j) => void (j.view.center.y = "abc"),

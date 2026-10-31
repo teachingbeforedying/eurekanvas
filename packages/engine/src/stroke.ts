@@ -17,17 +17,7 @@
  */
 
 import { add, dyadicFromString, dyadicToString, equals, fromNumber, shift, sub, toNumber } from "./dyadic";
-import {
-  type Camera,
-  type Point,
-  type ScreenPoint,
-  type Turn,
-  type Viewport,
-  screenToWorld,
-  turnOf,
-  turned,
-  worldToScreen,
-} from "./camera";
+import { type Camera, type Point, type ScreenPoint, type Viewport, screenToWorld } from "./camera";
 
 /** A point of a section: an offset from the anchor and the stroke thickness there, in local units. */
 export interface LocalPoint {
@@ -170,34 +160,6 @@ export class StrokeRecorder {
     if (open === null) return { sections: [...this.closed] };
     return { sections: [...this.closed, { anchor: open.anchor, zLevel: open.zLevel, points: [...open.points] }] };
   }
-}
-
-/** Where the local points of a section appear on the screen: `origin + R · local * scale`, `R` being the camera's turn. */
-export interface SectionProjection {
-  readonly origin: ScreenPoint;
-  readonly scale: number;
-  readonly turn: Turn;
-}
-
-/**
- * The transformation that places a section on the screen, relative to the camera, as plain floats.
- * Returns `null` when it cannot be expressed that way (the origin is infinitely far, or the section is
- * more than about 1 000 levels away from the camera, so its scale is 0 or infinite).
- *
- * This is a float computation: when the camera is much deeper than the section, the origin is very far
- * from the screen and the result loses precision (see docs/noyau.md). The exact route for any point
- * is `worldToScreen(camera, viewport, pointWorld(section, i))`.
- */
-export function projectSection(section: Section, camera: Camera, viewport: Viewport): SectionProjection | null {
-  const origin = worldToScreen(camera, viewport, section.anchor);
-  const scale = 2 ** (camera.zLevel - section.zLevel) * camera.factor;
-  if (!(Number.isFinite(origin.x) && Number.isFinite(origin.y) && Number.isFinite(scale) && scale > 0)) return null;
-  return { origin, scale, turn: turnOf(camera.angle) };
-}
-
-export function localToScreen(projection: SectionProjection, local: { readonly x: number; readonly y: number }): ScreenPoint {
-  const offset = turned(projection.turn, local.x * projection.scale, local.y * projection.scale);
-  return { x: projection.origin.x + offset.x, y: projection.origin.y + offset.y };
 }
 
 export const STROKE_FORMAT = "eurekanvas/stroke";

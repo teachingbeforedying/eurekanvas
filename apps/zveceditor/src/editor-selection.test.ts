@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Item, type ScreenPoint, type Viewport, boundsOf, isGroup, itemStrokes } from "@eurekanvas/engine";
+import { type Item, type ScreenPoint, type Viewport, type WorldBounds, boundsOf, isGroup, itemStrokes, placedSections, worldRectangle } from "@eurekanvas/engine";
 import { Editor, type Modifiers } from "./editor";
 
 // With the starting view, world point (x, y) is at screen (640 + x, 360 + y).
@@ -341,17 +341,18 @@ describe("deleting and grouping", () => {
 });
 
 describe("the scene", () => {
-  it("has the strokes of the selection and its exact box", () => {
+  it("has the sections of the selection and its exact frame", () => {
     const editor = new Editor(viewport);
     const a = drawObject(editor, 100, 100, 2);
     drawObject(editor, 100, 200);
-    expect(editor.scene.selectedStrokes?.size).toBe(0);
-    expect(editor.scene.selectionBounds).toBeNull();
+    expect(editor.scene.selectedSections?.size).toBe(0);
+    expect(editor.scene.selectionFrame).toBeNull();
     click(editor, { x: 125, y: 100 });
-    expect([...(editor.scene.selectedStrokes ?? [])]).toEqual(itemStrokes(a));
-    expect(editor.scene.selectionBounds).toEqual(boundsOf([a]));
+    expect([...(editor.scene.selectedSections ?? [])]).toEqual(placedSections(a));
+    expect(editor.scene.selectionFrame).toEqual(worldRectangle(boundsOf([a]) as WorldBounds));
     expect(editor.scene.band).toBeNull();
+    expect(itemStrokes(a)).toHaveLength(2);
     editor.clear();
-    expect(editor.scene.selectionBounds).toBeNull();
+    expect(editor.scene.selectionFrame).toBeNull();
   });
 });
