@@ -218,7 +218,7 @@ function updateHud(): void {
   const { camera } = editor;
   const stats = editor.stats;
   hud!.textContent = [
-    `zoom 2^${log2Scale(camera).toFixed(2)}   (level ${camera.zLevel}, factor ${camera.factor.toFixed(3)})`,
+    `zoom 2^${log2Scale(camera).toFixed(2)}   (level ${camera.zLevel}, factor ${camera.factor.toFixed(3)})   angle ${Number(camera.angle.toFixed(2))}°`,
     `objects ${editor.items.length} · selected ${editor.selection.size} · strokes ${stats.strokes} · sections ${stats.sections} · points ${stats.points} · drawn sections ${renderer.drawnSections}`,
     describePen(editor.pen, editor.ropeNow),
     `automatic save in this browser: ${autosave}`,
@@ -228,6 +228,7 @@ function updateHud(): void {
     `rectangle: drag from empty space; left to right takes what is inside, right to left what it touches`,
     `select all: Ctrl+A    what touches the screen: Space + Ctrl+A    delete: Delete    group: Shift+G    ungroup: Shift+B`,
     `zoom: wheel (also while drawing)    move the view: right or middle button, or Space + left button`,
+    `turn the view: hold R and move the mouse around the middle (Shift: 15° steps)    R+Shift+H / R+Shift+G: a quarter turn    R + release Space: straight`,
     `undo: Ctrl+Z (while ² is held: the last stroke)    reset the view: 0    clear: K (Ctrl+Z brings it back)`,
     `save a file: Ctrl+S    open a file (adds to the drawing): Ctrl+O    show or hide this panel: H`,
   ].join("\n");
@@ -272,10 +273,10 @@ canvas.addEventListener("pointermove", (event) => {
   for (const each of events.length > 0 ? events : [event]) {
     const p = position(each);
     syncButtons(each.buttons, p, each.timeStamp);
-    editor.pointerMove(p, each.timeStamp);
+    editor.pointerMove(p, each.timeStamp, { shift: each.shiftKey });
   }
   pointer = position(event);
-  if (editor.isMovingView) changed();
+  if (editor.isMovingView || editor.isTurningView) changed();
   invalidate();
 });
 
@@ -308,9 +309,11 @@ canvas.addEventListener(
   { passive: false },
 );
 
-// Space and A are followed for Space + Ctrl+A (selects what touches the screen), pressed in any order.
+// Space and A are followed for Space + Ctrl+A (selects what touches the screen), pressed in any order. R is the
+// turning key: while it is held, the mouse turns the view, and H, G and Space do something else.
 let spaceDown = false;
 let aDown = false;
+let rDown = false;
 
 function select(report: SelectionReport): void {
   showSelected(report);
@@ -331,6 +334,18 @@ window.addEventListener("keydown", (event) => {
     invalidate();
   } else if (event.key === "Alt") {
     event.preventDefault(); // Alt+click takes the object below: Alt must not open the menu bar (Firefox) or focus the browser menu
+  } else if (!ctrl && event.key.toLowerCase() === "r") {
+    if (!event.repeat) {
+      rDown = true;
+      editor.setTurnKeyHeld(true);
+    }
+  } else if (rDown && (event.key.toLowerCase() === "h" || event.key.toLowerCase() === "g")) {
+    // with Shift, a quarter turn of the view: H clockwise, G the other way (without Shift, H and G will turn the selection)
+    if (event.shiftKey && !event.repeat) {
+      editor.turnView(event.key.toLowerCase() === "h" ? 90 : -90);
+      changed();
+      invalidate();
+    }
   } else if (event.code === "Space") {
     editor.setSpaceHeld(true);
     spaceDown = true;
@@ -400,9 +415,19 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keyup", (event) => {
   if (event.key.toLowerCase() === "a") aDown = false;
   if (event.key === "Alt") event.preventDefault(); // Firefox opens its menu bar when Alt is released
+  if (!event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "r") {
+    rDown = false;
+    editor.setTurnKeyHeld(false);
+  }
   if (event.code === "Space") {
     editor.setSpaceHeld(false);
     spaceDown = false;
+    // R + Space: the view turns back straight (with a selection, the selection will take the angle of the view)
+    if (rDown && editor.selection.size === 0) {
+      editor.straightenView();
+      changed();
+      invalidate();
+    }
   }
   if (event.code === "Backquote") {
     editor.setDrawKeyHeld(false); // the strokes of the hold become one object
@@ -414,6 +439,8 @@ window.addEventListener("keyup", (event) => {
 window.addEventListener("blur", () => {
   editor.setSpaceHeld(false);
   editor.setDrawKeyHeld(false);
+  editor.setTurnKeyHeld(false);
+  rDown = false;
   spaceDown = false;
   aDown = false;
   changed();

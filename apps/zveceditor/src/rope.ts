@@ -1,4 +1,4 @@
-import type { ScreenPoint } from "@eurekanvas/engine";
+import { type ScreenPoint, turnOf, turned } from "@eurekanvas/engine";
 
 /** The shortest rope that follows the speed of the hand, in pixels: it still removes the smallest tremors. */
 export const MIN_SPEED_ROPE = 4;
@@ -27,8 +27,8 @@ function distance(a: ScreenPoint, b: ScreenPoint): number {
  *
  * The rope is measured on the screen, because that is where the hand shakes. To draw finer details, zoom in.
  *
- * Everything here is in screen pixels. The editor tells the rope when the view moves or zooms, so that the
- * brush stays on the same place of the drawing.
+ * Everything here is in screen pixels. The editor tells the rope when the view moves, zooms or turns, so that
+ * the brush stays on the same place of the drawing.
  */
 export class Rope {
   private brush: ScreenPoint = { x: 0, y: 0 };
@@ -91,6 +91,13 @@ export class Rope {
    */
   shifted(dx: number, dy: number): void {
     this.brush = { x: this.brush.x + dx, y: this.brush.y + dy };
+    this.samples = [];
+  }
+
+  /** The view turned by `degrees`, clockwise, around `pivot`: the brush keeps its place on the drawing, as with `shifted`. */
+  rotated(pivot: ScreenPoint, degrees: number): void {
+    const offset = turned(turnOf(degrees), this.brush.x - pivot.x, this.brush.y - pivot.y);
+    this.brush = { x: pivot.x + offset.x, y: pivot.y + offset.y };
     this.samples = [];
   }
 

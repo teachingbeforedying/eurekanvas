@@ -77,6 +77,17 @@ describe("selectDrawableSections", () => {
     expect(selectDrawableSections([short], createCamera({ center: shortCentre, zLevel: 18 }), viewport)).toHaveLength(1);
   });
 
+  it("finds what a turned view brings onto the screen", () => {
+    const below = stroke([[0, 400], [0, 500]]); // below the screen in a straight view
+    expect(selectDrawableSections([below], camera, viewport)).toEqual([]);
+    const quarter = createCamera({ angle: 90 }); // the world's y axis points to the left: from x = 240 to 140
+    expect(selectDrawableSections([below], quarter, viewport)).toHaveLength(1);
+    // a box of 0.45 pixel: too small straight, but its turned box is 0.64 pixel wide
+    const speck = stroke([[0, 0], [0.35, 0.35]], 0, 0.1);
+    expect(selectDrawableSections([speck], camera, viewport)).toEqual([]);
+    expect(selectDrawableSections([speck], createCamera({ angle: 45 }), viewport)).toHaveLength(1);
+  });
+
   it("leaves out sections that cannot be placed, instead of failing", () => {
     const far = stroke([[0, 0], [10, 0]]);
     expect(selectDrawableSections([far], createCamera({ zLevel: 1100 }), viewport, { maxLevelGap: 5000 })).toEqual([]);

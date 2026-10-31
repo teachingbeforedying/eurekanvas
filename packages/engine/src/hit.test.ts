@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { type Point, type Viewport, createCamera } from "./camera";
+import { ORIGIN, type Point, type Viewport, createCamera } from "./camera";
 import type { Item } from "./drawing";
 import { type Dyadic, add, fromNumber, shift } from "./dyadic";
-import { boundsFromCorners, boundsOf, boundsToScreen, itemBounds, itemsAt, itemsInRectangle } from "./hit";
+import {
+  boundsFromCorners,
+  boundsOf,
+  itemBounds,
+  itemsAt,
+  itemsInRectangle,
+  orientedRectangle,
+  viewBounds,
+  worldRectangle,
+} from "./hit";
 import { type Stroke, StrokeRecorder } from "./stroke";
 
 // With the default camera (level 0, centre at the world origin), world point (x, y) is at screen (640 + x, 360 + y).
@@ -22,6 +31,11 @@ function stroke(points: readonly (readonly [number, number])[], zLevel = 0, widt
 /** The exact rectangle from (x1, y1) to (x2, y2). */
 function rect(x1: number, y1: number, x2: number, y2: number) {
   return boundsFromCorners(pt(x1, y1), pt(x2, y2));
+}
+
+/** The same, as a rectangle to select with, not turned. */
+function area(x1: number, y1: number, x2: number, y2: number) {
+  return worldRectangle(rect(x1, y1, x2, y2));
 }
 
 /** `whole + fraction * 2^-k`, exactly. */
@@ -77,6 +91,19 @@ describe("itemsAt", () => {
     expect(itemsAt([], camera, viewport, { x: 690, y: 360 })).toEqual([]);
   });
 
+  it("finds the ink where a turned view shows it", () => {
+    const line = stroke([[0, 0], [100, 0]], 0, 2);
+    const quarter = createCamera({ angle: 90 }); // the line goes down the screen from the middle
+    expect(itemsAt([line], quarter, viewport, { x: 640, y: 410 })).toEqual([0]);
+    expect(itemsAt([line], quarter, viewport, { x: 645, y: 410 }, 4)).toEqual([0]);
+    expect(itemsAt([line], quarter, viewport, { x: 645, y: 410 }, 3.9)).toEqual([]);
+    expect(itemsAt([line], quarter, viewport, { x: 690, y: 360 }, 4)).toEqual([]); // where it is in a straight view
+    const thirty = createCamera({ angle: 30 });
+    const along = { x: 640 + 50 * Math.cos(Math.PI / 6), y: 360 + 50 * Math.sin(Math.PI / 6) };
+    expect(itemsAt([line], thirty, viewport, along)).toEqual([0]);
+    expect(itemsAt([line], thirty, viewport, { x: along.x + 3, y: along.y - 5 }, 4)).toEqual([]);
+  });
+
   it("does not take what is not drawn: a section too small to see cannot be hit", () => {
     const tiny = stroke([[0, 0], [0.25, 0]], 10); // a quarter of a pixel
     expect(itemsAt([tiny], camera, viewport, { x: 640, y: 360 }, 4)).toEqual([]);
@@ -90,40 +117,40 @@ describe("itemsInRectangle", () => {
     const across = stroke([[40, 0], [100, 0]]);
     const away = stroke([[200, 0], [300, 0]]);
     const items = [across, away, within];
-    expect(itemsInRectangle(items, rect(-10, -10, 60, 10), "inside")).toEqual([2]);
-    expect(itemsInRectangle(items, rect(-10, -10, 60, 10), "touching")).toEqual([0, 2]);
-    expect(itemsInRectangle(items, rect(60, 10, -10, -10), "touching")).toEqual([0, 2]); // corners in any order
-    expect(itemsInRectangle([], rect(-10, -10, 60, 10), "touching")).toEqual([]);
+    expect(itemsInRectangle(items, area(-10, -10, 60, 10), "inside")).toEqual([2]);
+    expect(itemsInRectangle(items, area(-10, -10, 60, 10), "touching")).toEqual([0, 2]);
+    expect(itemsInRectangle(items, area(60, 10, -10, -10), "touching")).toEqual([0, 2]); // corners in any order
+    expect(itemsInRectangle([], area(-10, -10, 60, 10), "touching")).toEqual([]);
   });
 
   it("counts the ink, thickness included, not the box of the stroke", () => {
     const diagonal = stroke([[0, 0], [100, 100]]);
-    expect(itemsInRectangle([diagonal], rect(80, 0, 100, 20), "touching")).toEqual([]); // in its box, off its ink
-    expect(itemsInRectangle([diagonal], rect(40, 40, 60, 45), "touching")).toEqual([0]);
+    expect(itemsInRectangle([diagonal], area(80, 0, 100, 20), "touching")).toEqual([]); // in its box, off its ink
+    expect(itemsInRectangle([diagonal], area(40, 40, 60, 45), "touching")).toEqual([0]);
 
     const thick = stroke([[0, 0], [50, 0]], 0, 10); // 5 units on each side
-    expect(itemsInRectangle([thick], rect(0, 4, 10, 20), "touching")).toEqual([0]);
-    expect(itemsInRectangle([thick], rect(0, 6, 10, 20), "touching")).toEqual([]);
-    expect(itemsInRectangle([thick], rect(-1, -1, 51, 1), "inside")).toEqual([]); // its points are inside, its ink is not
-    expect(itemsInRectangle([thick], rect(-6, -6, 56, 6), "inside")).toEqual([0]);
+    expect(itemsInRectangle([thick], area(0, 4, 10, 20), "touching")).toEqual([0]);
+    expect(itemsInRectangle([thick], area(0, 6, 10, 20), "touching")).toEqual([]);
+    expect(itemsInRectangle([thick], area(-1, -1, 51, 1), "inside")).toEqual([]); // its points are inside, its ink is not
+    expect(itemsInRectangle([thick], area(-6, -6, 56, 6), "inside")).toEqual([0]);
 
     // thin along y = 0, thick (20 units) far away: the box of the ink reaches 10 units above the thin part
     const recorder = new StrokeRecorder();
     for (const [x, y, width] of [[0, 0, 1], [50, 0, 1], [50, 100, 1], [300, 100, 20]] as const) recorder.addPoint(pt(x, y), 0, width);
     const thinThenThick = recorder.stroke;
-    expect(itemsInRectangle([thinThenThick], rect(0, -8, 40, -2), "touching")).toEqual([]);
-    expect(itemsInRectangle([thinThenThick], rect(0, -8, 40, -0.4), "touching")).toEqual([0]);
+    expect(itemsInRectangle([thinThenThick], area(0, -8, 40, -2), "touching")).toEqual([]);
+    expect(itemsInRectangle([thinThenThick], area(0, -8, 40, -0.4), "touching")).toEqual([0]);
 
     const dot = stroke([[0, 0]], 0, 10);
-    expect(itemsInRectangle([dot], rect(3, -1, 10, 1), "touching")).toEqual([0]);
-    expect(itemsInRectangle([dot], rect(6, -1, 10, 1), "touching")).toEqual([]);
+    expect(itemsInRectangle([dot], area(3, -1, 10, 1), "touching")).toEqual([0]);
+    expect(itemsInRectangle([dot], area(6, -1, 10, 1), "touching")).toEqual([]);
   });
 
   it("takes a group whole: touched by one of its strokes, or inside with all of them", () => {
     const group: Item = { items: [stroke([[0, 0], [10, 0]]), stroke([[100, 0], [110, 0]])] };
-    expect(itemsInRectangle([group], rect(-5, -5, 20, 5), "touching")).toEqual([0]);
-    expect(itemsInRectangle([group], rect(-5, -5, 20, 5), "inside")).toEqual([]);
-    expect(itemsInRectangle([group], rect(-5, -5, 120, 5), "inside")).toEqual([0]);
+    expect(itemsInRectangle([group], area(-5, -5, 20, 5), "touching")).toEqual([0]);
+    expect(itemsInRectangle([group], area(-5, -5, 20, 5), "inside")).toEqual([]);
+    expect(itemsInRectangle([group], area(-5, -5, 120, 5), "inside")).toEqual([0]);
   });
 
   it("is exact far deeper than a number could tell apart", () => {
@@ -132,20 +159,48 @@ describe("itemsInRectangle", () => {
     recorder.addPoint(pt(1, 1), 60);
     recorder.addPoint({ x: exact(1, 100, 60), y: fromNumber(1) }, 60);
     const tiny = recorder.stroke;
-    expect(itemsInRectangle([tiny], rect(0, 0, 2, 2), "inside")).toEqual([0]);
+    expect(itemsInRectangle([tiny], area(0, 0, 2, 2), "inside")).toEqual([0]);
     const fromMiddle = { minX: exact(1, 50, 60), minY: fromNumber(0), maxX: fromNumber(2), maxY: fromNumber(2) };
-    expect(itemsInRectangle([tiny], fromMiddle, "inside")).toEqual([]);
-    expect(itemsInRectangle([tiny], fromMiddle, "touching")).toEqual([0]);
+    expect(itemsInRectangle([tiny], worldRectangle(fromMiddle), "inside")).toEqual([]);
+    expect(itemsInRectangle([tiny], worldRectangle(fromMiddle), "touching")).toEqual([0]);
     const beyond = { ...fromMiddle, minX: exact(1, 102, 60) };
-    expect(itemsInRectangle([tiny], beyond, "touching")).toEqual([]);
+    expect(itemsInRectangle([tiny], worldRectangle(beyond), "touching")).toEqual([]);
   });
 
   it("is exact for a huge stroke seen through a small rectangle", () => {
     // 100 units of level -60 long: 100 * 2^60 world units, and 2^59 on each side of y = 0
     const huge = stroke([[0, 0], [100 * 2 ** 60, 0]], -60);
     const middle = 50 * 2 ** 60;
-    expect(itemsInRectangle([huge], rect(middle, 2 ** 58, middle + 1, 2 ** 58 + 1), "touching")).toEqual([0]);
-    expect(itemsInRectangle([huge], rect(middle, 2 ** 60, middle + 1, 2 ** 60 + 1), "touching")).toEqual([]);
+    expect(itemsInRectangle([huge], area(middle, 2 ** 58, middle + 1, 2 ** 58 + 1), "touching")).toEqual([0]);
+    expect(itemsInRectangle([huge], area(middle, 2 ** 60, middle + 1, 2 ** 60 + 1), "touching")).toEqual([]);
+  });
+
+  it("follows the sides of a turned view", () => {
+    // turned by -45°, the diagonal from (0, 0) to (100, 100) is horizontal: from 0 to 141.4 along the first axis
+    const diagonal = stroke([[0, 0], [100, 100]]);
+    const aside = stroke([[100, 0], [110, 0]]);
+    const thin = { origin: ORIGIN, angle: 315, bounds: rect(-5, -3, 150, 3) };
+    expect(itemsInRectangle([diagonal, aside], thin, "inside")).toEqual([0]);
+    expect(itemsInRectangle([diagonal, aside], thin, "touching")).toEqual([0]);
+    // a thin rectangle across the middle of the diagonal, which its straight box would not tell apart
+    const across = { origin: ORIGIN, angle: 315, bounds: rect(60, -20, 80, 20) };
+    expect(itemsInRectangle([diagonal, aside], across, "touching")).toEqual([0]);
+    expect(itemsInRectangle([diagonal, aside], { ...across, bounds: rect(60, 1, 80, 20) }, "touching")).toEqual([]);
+  });
+
+  it("is exact on the sides of a quarter turn", () => {
+    // turned by 90°, the view coordinates of (x, y) are (-y, x): the line is 2 units thick around the second axis
+    const line = stroke([[0, 0], [50, 0]], 0, 2);
+    const turned = (x1: number, y1: number, x2: number, y2: number) => ({ origin: ORIGIN, angle: 90, bounds: rect(x1, y1, x2, y2) });
+    expect(itemsInRectangle([line], turned(-1, -1, 1, 51), "inside")).toEqual([0]);
+    expect(itemsInRectangle([line], turned(-0.99, -1, 1, 51), "inside")).toEqual([]);
+    expect(itemsInRectangle([line], turned(1, 10, 5, 20), "touching")).toEqual([0]);
+    expect(itemsInRectangle([line], turned(1.01, 10, 5, 20), "touching")).toEqual([]);
+  });
+
+  it("is made from two world corners, in the view's coordinates", () => {
+    expect(orientedRectangle(pt(0, 0), pt(-10, 10), ORIGIN, 90).bounds).toEqual(rect(-10, -10, 0, 0));
+    expect(orientedRectangle(pt(3, 4), pt(5, 1), pt(1, 1), 0).bounds).toEqual(rect(2, 0, 4, 3));
   });
 });
 
@@ -163,7 +218,9 @@ describe("itemBounds", () => {
     expect(itemBounds({ sections: [] })).toBeNull();
   });
 
-  it("appears on the screen where the camera shows it", () => {
-    expect(boundsToScreen(camera, viewport, rect(0, 0, 10, 20))).toEqual({ left: 640, top: 360, right: 650, bottom: 380 });
+  it("lies in the view along the world's axes, in pixels from the middle of the screen", () => {
+    expect(viewBounds(camera, rect(0, 0, 10, 20))).toEqual({ left: 0, top: 0, right: 10, bottom: 20 });
+    const zoomed = createCamera({ center: pt(5, 5), zLevel: 1, angle: 30 }); // the angle is left to the renderer
+    expect(viewBounds(zoomed, rect(0, 0, 10, 20))).toEqual({ left: -10, top: -10, right: 10, bottom: 30 });
   });
 });

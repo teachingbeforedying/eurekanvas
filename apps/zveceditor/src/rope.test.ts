@@ -227,3 +227,14 @@ describe("the rope that follows the speed of the hand", () => {
     }
   });
 });
+
+describe("Rope.rotated", () => {
+  it("keeps the brush on the drawing when the view turns", () => {
+    const rope = new Rope(10);
+    rope.start({ x: 100, y: 0 });
+    rope.rotated({ x: 0, y: 0 }, 90);
+    expect(rope.position).toEqual({ x: 0, y: 100 });
+    rope.rotated({ x: 0, y: 100 }, 45); // around the brush itself: it does not move
+    expect(rope.position).toEqual({ x: 0, y: 100 });
+  });
+});

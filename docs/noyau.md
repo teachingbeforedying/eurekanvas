@@ -348,7 +348,27 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 
 **Non prévu pour l'instant** : poignées, lasso, verrouillage, ordre d'affichage, aimantation à une grille.
 
-**Rotation : très bientôt** (demande de Sébastien, 2026-10-31). Dans l'ancienne version, il l'avait faite tard et elle lui avait coûté beaucoup d'efforts : plus tôt on la gère, mieux c'est. À décider avant de la commencer : tourner les objets, la vue, ou les deux ; et comment la stocker, puisqu'une rotation quelconque ne garde pas les positions dyadiques exactes (cos et sin ne sont pas dyadiques) : une transformation gardée par objet, ou des points recalculés.
+## La rotation : décisions (2026-10-31)
+
+Sébastien veut la rotation tôt : dans l'ancienne version, il l'avait faite tard et elle lui avait coûté beaucoup d'efforts. Elle passe avant l'étape 3 de la sélection.
+
+**Ce que faisait l'ancienne version** (`3DRoom+ic.html`) :
+- la vue : `R` tenu + la souris la tournent autour du centre de l'écran, comme un bouton qu'on tourne, même pendant un trait (L33544, L77203) ; `R`+Maj+`H` / `R`+Maj+`G` : ±90° (L75734, L76197) ; `R` + relâcher `Espace` remet l'angle à 0 ;
+- les objets : `R`+`H` / `R`+`G` tournent l'objet sélectionné de ±90° autour de son centre (L31384) ; `R` + relâcher `Espace` l'aligne sur l'angle de la vue (L31400, L76613) ; la poignée de rotation de fabric ;
+- chaque objet est un parallélogramme (une transformation affine complète) en Decimal, et la caméra aussi, avec du cisaillement.
+
+**Décisions de Sébastien** :
+- **On tourne la vue et les objets.**
+- **Un objet garde sa transformation** au lieu d'avoir ses points recalculés. C'est une similitude : rotation, échelle uniforme, miroir possible, et une position exacte, sans cisaillement. L'échelle s'écrit comme celle de la caméra (2^k × facteur dans [1, 2)) pour rester finie à toute profondeur ; le niveau effectif d'une section combine alors son niveau et celui de son cadre.
+- **À l'étape 3, tout passe par la transformation** : glisser, flèches, zoomScroll, craneScroll. Les traits gardent les coordonnées de leur tracé.
+- **Gestes** :
+  - vue : `R` + souris, autour du centre de l'écran, aussi pendant un trait ; `R`+Maj+`H` / `R`+Maj+`G` : ±90° ;
+  - objets : `R`+`H` / `R`+`G` : ±90° autour du centre de la sélection ; `R` + bouton gauche + souris : rotation libre de la sélection ;
+  - `R` + relâcher `Espace` : la sélection prend l'angle de la vue ; sans sélection, la vue revient à 0° ;
+  - avec Maj, la rotation libre avance par crans de 15°.
+- **Deux livraisons**, chacune essayée à la main et commitée : d'abord la vue (caméra, rendu, clic, rectangle, tracé pendant la rotation), puis les transformations d'objets (format version 3, gestes des objets, aligner sur la vue).
+
+**Choix techniques à prévoir** : les angles en degrés, pour que les quarts de tour soient exacts (cos et sin valent alors exactement 0 ou ±1) ; les différences de positions exactes restent calculées avant d'être tournées.
 
 ## Étape 1 de la sélection : groupes, touche `²`, interface (2026-10-25)
 
@@ -379,7 +399,7 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 - **Moteur** (`packages/engine/src/hit.ts`) :
   - `itemsAt` donne les objets dessinés sous un point de l'écran, du dessus vers le dessous. Seul ce qui est dessiné compte : mêmes règles que `selectDrawableSections`, dont le choix par section est devenu `drawableProjection`. Le test mesure, en unités locales, la distance du pointeur à chaque segment, avec l'épaisseur interpolée entre ses deux bouts, plus la tolérance (4 px).
   - `itemsInRectangle` travaille sur un rectangle exact du monde (dyadiques). En mode `inside`, il compare la boîte exacte de l'encre de l'objet. En mode `touching`, la boîte exacte de chaque section tranche les cas simples. Quand le rectangle coupe cette boîte, ses côtés passent en unités locales de la section, bornés près d'elle pour tenir dans un `number`. Chaque segment est alors élargi de sa demi-épaisseur, en carré : jusqu'à 0,4 épaisseur de trop près d'un coin.
-  - `itemBounds`, `boundsOf` et `boundsToScreen` donnent des boîtes exactes, mémorisées par section et par objet.
+  - `itemBounds`, `boundsOf` et `boundsToScreen` (devenue `viewBounds` avec la rotation) donnent des boîtes exactes, mémorisées par section et par objet.
 - **Éditeur** :
   - La sélection est un ensemble d'objets du premier niveau, gardés par identité. À chaque changement des objets, `Ctrl+Z` compris, elle ne garde que ceux encore présents.
   - Un appui sur un objet est un clic (l'étape 3 en fera un déplacement). Ailleurs, il devient un rectangle au-delà de 4 px. Le coin de départ est un point exact du monde : on peut zoomer ou déplacer la vue pendant le tracé, et le rectangle prend à toute profondeur.
@@ -405,6 +425,35 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 - la dernière (`Ctrl+A` qui terminait l'appui) a fait changer le code : sélectionner ne termine plus l'appui.
 
 Toutes sont tuées ensuite.
+
+## Rotation, première livraison : la vue (2026-10-31)
+
+- **Caméra** (`packages/engine/src/camera.ts`) : un angle en degrés, dans [0, 360). Un décalage `d` du monde par rapport au centre apparaît à `R(angle) · d · échelle` du milieu de l'écran, dans le sens des aiguilles d'une montre (l'axe y descend).
+  - Les quarts de tour utilisent les valeurs exactes 0 et ±1 (`turnOf`) : quatre quarts de tour autour du milieu redonnent exactement la même caméra.
+  - La rotation ne s'applique qu'aux petits décalages en pixels, après la différence exacte avec le centre : la précision ne change pas, à toute profondeur.
+  - `rotateAt` tourne autour d'un point de l'écran en gardant exactement le point du monde qui est dessous, par le même argument que `zoomAt` (un seul calcul, `worldOffset`, pour aller et revenir).
+  - Un coefficient nul annule son terme même devant un infini : un point trop loin pour un `number` reste sur sa colonne après un quart de tour.
+- **Sections, rendu, clic** : la projection d'une section porte la rotation ; le choix de ce qu'on dessine prend la boîte tournée ; le clic ramène le pointeur dans les unités locales en détournant.
+- **Rectangle** (`OrientedRectangle`, `packages/engine/src/hit.ts`) : un rectangle tiré à l'écran est droit à l'écran, donc tourné dans le monde.
+  - On le décrit dans les coordonnées de la vue, `R · (w − centre)`, calculées exactement : un cosinus et un sinus sont des `number`, donc des dyadiques, et leur produit avec une différence exacte reste exact.
+  - Les quatre coins de la boîte exacte de chaque section y passent ; si elle n'est ni dehors ni dedans, le test fin se fait en unités locales tournées.
+  - « Dedans » se juge maintenant point par point (chaque bout rond dans le rectangle), et non plus sur la boîte de l'objet, qui serait trop large une fois tournée.
+- **Cadre de la sélection** : il suit les axes du dessin, donc tourne avec la vue (`viewBounds` le donne avant la rotation, le rendu le tourne).
+- **Format** : `view.angle`, facultatif. Un lecteur plus ancien l'ignore et montre la vue droite, sans perdre d'objet : la version reste 2.
+- **Éditeur et page** :
+  - `R` tenu : la souris tourne la vue autour du milieu de l'écran, de l'angle qu'elle balaie autour de lui, comme un bouton. Avec Maj, par crans de 15° : l'angle balayé s'additionne, donc un geste lent atteint quand même le cran suivant.
+  - À moins de 8 px du milieu, la souris ne tourne rien : l'angle y est trop instable.
+  - `R`+Maj+`H` / `R`+Maj+`G` : un quart de tour (H dans le sens des aiguilles d'une montre). `R` + relâcher `Espace` : la vue revient droite par le plus court chemin, s'il n'y a pas de sélection. `0` remet aussi l'angle à 0.
+  - `R`+`H`, `R`+`G` sans Maj, et `R` + bouton gauche ne font rien pour l'instant : ils tourneront la sélection (deuxième livraison). Avec `R` tenu, le bouton gauche ne sélectionne pas.
+  - Pendant un trait, `R` met le trait en pause ; la corde garde son bout sur le dessin (`Rope.rotated`). Au relâchement de `R`, le trait reprend de son bout vers le pointeur, par un segment droit si la main s'est éloignée. L'ancienne version coupait le trait à cet endroit : à faire juger par Sébastien.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements synthétiques ; rendu forcé à la main, panneau caché) :
+- `R` + souris : 30° ; avec Maj : 45° ; `R`+Maj+`H` : +90° sans ouvrir le panneau ; `R` + `Espace` : 0° ;
+- pendant un trait, aucun point ajouté tant que `R` est tenu ;
+- clic sur un trait à sa place tournée, et rien à son ancienne place ; rectangle de droite à gauche droit à l'écran ; cadre tourné de l'angle de la vue ;
+- l'angle est dans la sauvegarde automatique ; aucune erreur après rechargement.
+
+**Contrôle par mutation** : 24 modifications volontaires, 23 tuées. La survivante saute le raccourci « boîte entièrement dans le rectangle » : elle est équivalente, puisque le test fin donne alors la même réponse.
 
 ## Critères de réussite du tronçon
 

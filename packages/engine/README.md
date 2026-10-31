@@ -9,8 +9,8 @@ at any zoom depth, objects, z-index, save and load.
 ## What exists
 
 - `src/dyadic.ts`: exact numbers `n / 2^e` (BigInt numerator), used for every position of the world.
-- `src/camera.ts`: an immutable camera with an exact center and an integer zoom level; screen ↔ world
-  conversion, pan, and zoom that keeps the point under the cursor exactly where it is.
+- `src/camera.ts`: an immutable camera with an exact center, an integer zoom level and an angle; screen ↔ world
+  conversion, pan, and zoom and rotation that keep the point under the cursor exactly where it is.
 - `src/stroke.ts`: strokes drawn while zooming, split into "sections" (an exact anchor plus small float
   offsets), a recorder, projection to the screen, and a JSON form
   (specified in [docs/stroke-format.md](../../docs/stroke-format.md)).
@@ -22,7 +22,7 @@ at any zoom depth, objects, z-index, save and load.
 - `src/render.ts`: the `Renderer` interface a drawing library implements, the `Scene` it draws (selection
   included), and `selectDrawableSections`, which chooses what is worth drawing for a camera.
 - `src/hit.ts`: the objects under a point of the screen (what is drawn there), and the objects in a rectangle
-  of the world, compared exactly at any depth.
+  that may follow a turned view, compared exactly at any depth.
 
 Design notes and measurements: [docs/noyau.md](../../docs/noyau.md).
 

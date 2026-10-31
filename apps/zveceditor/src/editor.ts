@@ -11,16 +11,18 @@ import {
   type Viewport,
   type WorldBounds,
   StrokeRecorder,
-  boundsFromCorners,
   boundsOf,
   createCamera,
   isGroup,
   itemStrokes,
   itemsAt,
   itemsInRectangle,
+  orientedRectangle,
   pan,
+  rotateAt,
   screenToWorld,
   selectDrawableSections,
+  shortestAngle,
   worldToScreen,
   zoomAt,
 } from "@eurekanvas/engine";
@@ -77,6 +79,12 @@ export const CLICK_TOLERANCE_PIXELS = 4;
 
 /** How far, in pixels, the pointer must move with the button down before a click becomes a rectangle. */
 export const DRAG_THRESHOLD_PIXELS = 4;
+
+/** With Shift, the view turned by the pointer stops at multiples of this angle, in degrees. */
+export const TURN_STEP_DEGREES = 15;
+
+/** Pointer positions this close to the middle of the screen, in pixels, do not turn the view: their angle is too unsteady. */
+export const TURN_DEAD_ZONE_PIXELS = 8;
 
 export type Button = "primary" | "middle" | "secondary";
 
@@ -139,7 +147,10 @@ export interface EditorStats {
  *   stroke when the button is released;
  * - wheel: zoom around the pointer, also while drawing. The point of the world under the pointer does not
  *   move, so zooming alone adds nothing to the stroke: the next pointer move continues it, with the
- *   thickness that makes it `STROKE_WIDTH_PIXELS` thick on the screen at that moment.
+ *   thickness that makes it `STROKE_WIDTH_PIXELS` thick on the screen at that moment;
+ * - with the turning key (`R`) held, the pointer turns the view around the middle of the screen, like a knob:
+ *   by the angle it sweeps around the middle, in steps of `TURN_STEP_DEGREES` with Shift. Also while
+ *   drawing: the stroke is paused, as when the view is moved.
  *
  * The pen can be smoothed with a rope (see `Rope` and `Pen`): the stroke follows the pointer at a distance of
  * at most the rope length, which removes the tremor of a hand. Without a rope the stroke goes through every
@@ -170,6 +181,11 @@ export class Editor {
   /** Where the pointer was at the last event. */
   private last: ScreenPoint = { x: 0, y: 0 };
   private press: Press | null = null;
+  /**
+   * While the turning key is held: the angle of the view when it was pressed (or after the last quarter turn),
+   * and the angle the pointer has swept since, before any rounding to steps.
+   */
+  private turning: { start: number; swept: number; at: number } | null = null;
   /** Top-level objects of the drawing. A new set at every change. */
   private _selection: ReadonlySet<Item> = new Set();
   /** The strokes and the box of the selection, remembered for the selection they come from. */
@@ -272,6 +288,7 @@ export class Editor {
         return;
       }
       if (!this.drawKeyHeld) {
+        if (this.turning) return; // the turning key is held: the pointer turns the view, and does not select
         // the drawing key must be held before the press to draw: without it, the button selects
         this.press = {
           start: screenToWorld(this._camera, this._viewport, p),
@@ -291,10 +308,12 @@ export class Editor {
     }
   }
 
-  pointerMove(p: ScreenPoint, time = performance.now()): void {
+  pointerMove(p: ScreenPoint, time = performance.now(), modifiers: Modifiers = {}): void {
     const dx = p.x - this.last.x;
     const dy = p.y - this.last.y;
-    if (this.isMovingView) {
+    if (this.turning) {
+      this.turnByPointer(p, modifiers.shift === true);
+    } else if (this.isMovingView) {
       this._camera = pan(this._camera, dx, dy);
       // the content follows the pointer, and so does the end of the stroke that is paused
       if (this.recorder) this.rope.shifted(dx, dy);
@@ -372,7 +391,9 @@ export class Editor {
 
   private selectInRectangle(press: Press): SelectionReport {
     const from = worldToScreen(this._camera, this._viewport, press.start);
-    const rectangle = boundsFromCorners(press.start, screenToWorld(this._camera, this._viewport, this.last));
+    const end = screenToWorld(this._camera, this._viewport, this.last);
+    // its sides follow the screen, so they follow the view when it is turned
+    const rectangle = orientedRectangle(press.start, end, this._camera.center, this._camera.angle);
     const taken = itemsInRectangle(this.finished, rectangle, rectangleMode(from, this.last));
     const items = taken.map((index) => this.finished[index] as Item);
     this.select(press.shift ? [...this._selection, ...items] : items);
@@ -394,9 +415,11 @@ export class Editor {
    */
   selectOnScreen(): SelectionReport {
     const corner = { x: this._viewport.width, y: this._viewport.height };
-    const screen = boundsFromCorners(
+    const screen = orientedRectangle(
       screenToWorld(this._camera, this._viewport, { x: 0, y: 0 }),
       screenToWorld(this._camera, this._viewport, corner),
+      this._camera.center,
+      this._camera.angle,
     );
     this.select(itemsInRectangle(this.finished, screen, "touching").map((index) => this.finished[index] as Item));
     return this.report();
@@ -507,6 +530,55 @@ export class Editor {
     const ratio = wheelZoomFactor(deltaY);
     this._camera = zoomAt(this._camera, this._viewport, p, ratio);
     if (this.recorder) this.rope.zoomed(p, ratio); // the end of the stroke stays on the drawing
+  }
+
+  /** The turning key (`R`) was pressed or released: while it is held, the pointer turns the view. */
+  setTurnKeyHeld(held: boolean): void {
+    const angle = this._camera.angle;
+    this.turning = held ? { start: angle, swept: 0, at: angle } : null;
+  }
+
+  /** The turning key is held: the pointer turns the view. */
+  get isTurningView(): boolean {
+    return this.turning !== null;
+  }
+
+  /** Turns the view by `degrees`, clockwise, around the middle of the screen. A quarter turn is exact. */
+  turnView(degrees: number): void {
+    const middle = { x: this._viewport.width / 2, y: this._viewport.height / 2 };
+    if (degrees === 0) return;
+    this._camera = rotateAt(this._camera, this._viewport, middle, degrees);
+    if (this.recorder) this.rope.rotated(middle, degrees); // the end of the stroke stays on the drawing
+  }
+
+  /** Turns the view back to 0°, the shortest way. */
+  straightenView(): void {
+    this.turnView(-shortestAngle(this._camera.angle));
+  }
+
+  /**
+   * The pointer moved to `p` with the turning key held: the view turns by the angle it swept around the middle of
+   * the screen, or to the nearest step with `steps`. The angle swept is added up, so that slow moves still reach
+   * the next step.
+   */
+  private turnByPointer(p: ScreenPoint, steps: boolean): void {
+    const turning = this.turning;
+    if (turning === null) return;
+    if (turning.at !== this._camera.angle) {
+      // the view was turned some other way since (a quarter turn, a reset...): start again from there
+      turning.start = this._camera.angle;
+      turning.swept = 0;
+    }
+    const middle = { x: this._viewport.width / 2, y: this._viewport.height / 2 };
+    const from = { x: this.last.x - middle.x, y: this.last.y - middle.y };
+    const to = { x: p.x - middle.x, y: p.y - middle.y };
+    if (Math.hypot(from.x, from.y) >= TURN_DEAD_ZONE_PIXELS && Math.hypot(to.x, to.y) >= TURN_DEAD_ZONE_PIXELS) {
+      turning.swept += shortestAngle(((Math.atan2(to.y, to.x) - Math.atan2(from.y, from.x)) * 180) / Math.PI);
+      const wanted = turning.start + turning.swept;
+      const target = steps ? Math.round(wanted / TURN_STEP_DEGREES) * TURN_STEP_DEGREES : wanted;
+      this.turnView(shortestAngle(target - this._camera.angle));
+    }
+    turning.at = this._camera.angle;
   }
 
   /** While Space is held, the primary button moves the view instead of drawing. */

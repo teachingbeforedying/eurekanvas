@@ -59,9 +59,21 @@ describe("drawing JSON form", () => {
     expect(drawingToJSON({ items: [stroke, { items: [stroke] }], view: createCamera() })).toEqual({
       format: "eurekanvas/drawing",
       version: 2,
-      view: { center: { x: "0/2^0", y: "0/2^0" }, zLevel: 0, factor: 1 },
+      view: { center: { x: "0/2^0", y: "0/2^0" }, zLevel: 0, factor: 1, angle: 0 },
       items: [strokeToJSON(stroke), { group: [strokeToJSON(stroke)] }],
     });
+  });
+
+  it("keeps the angle of the view, and reads a view without one as straight", () => {
+    const turned: Drawing = { items: [small()], view: createCamera({ zLevel: 2, angle: 37.5 }) };
+    expect(drawingFromJSON(JSON.parse(JSON.stringify(drawingToJSON(turned))))).toEqual(turned);
+    const json = valid();
+    delete (json.view as { angle?: unknown }).angle;
+    expect(drawingFromJSON(json).view.angle).toBe(0);
+    Object.assign(json.view, { angle: -90 });
+    expect(drawingFromJSON(json).view.angle).toBe(270);
+    Object.assign(json.view, { angle: "90" });
+    expect(() => drawingFromJSON(json)).toThrow(SyntaxError);
   });
 
   it("round-trips nested groups and a stroke 600 levels deep, exactly, through real JSON text", () => {

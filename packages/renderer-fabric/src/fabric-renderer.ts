@@ -7,10 +7,13 @@ import {
   type Section,
   type SectionProjection,
   type Stroke,
+  type Turn,
   type Viewport,
-  boundsToScreen,
   selectDrawableSections,
   strokeOutline,
+  turnOf,
+  turned,
+  viewBounds,
 } from "@eurekanvas/engine";
 
 export interface FabricRendererOptions {
@@ -121,14 +124,15 @@ export class FabricRenderer implements Renderer {
     this.drawn = next.length;
 
     if (scene.selectionBounds) {
-      const box = boundsToScreen(scene.camera, scene.viewport, scene.selectionBounds);
+      // the frame follows the axes of the drawing: it turns with the view
+      const box = viewBounds(scene.camera, scene.selectionBounds);
       const padded = {
         left: box.left - FRAME_PADDING,
         top: box.top - FRAME_PADDING,
         right: box.right + FRAME_PADDING,
         bottom: box.bottom + FRAME_PADDING,
       };
-      if (placeBox(this.frame, padded, scene.viewport)) next.push(this.frame);
+      if (placeTurnedBox(this.frame, padded, turnOf(scene.camera.angle), scene.viewport)) next.push(this.frame);
     }
     if (scene.band) {
       const { from, to, mode } = scene.band;
@@ -179,21 +183,45 @@ export class FabricRenderer implements Renderer {
 }
 
 /**
- * Places a section's path so that its local point `(x, y)` lands at `origin + (x, y) * scale`.
- * A fabric `Path` draws its coordinates minus `pathOffset` (the centre of its box) around its own centre,
- * and `applyTransformToObject` positions the object by that centre.
+ * Places a section's path so that its local point `(x, y)` lands at `origin + R · (x, y) * scale`, `R` being
+ * the view's turn. A fabric `Path` draws its coordinates minus `pathOffset` (the centre of its box) around its
+ * own centre, and `applyTransformToObject` positions the object by that centre.
  */
 function place(path: Path, projection: SectionProjection): void {
-  const { origin, scale } = projection;
+  const { origin, scale, turn } = projection;
+  const centre = turned(turn, path.pathOffset.x * scale, path.pathOffset.y * scale);
   util.applyTransformToObject(path, [
-    scale,
-    0,
-    0,
-    scale,
-    origin.x + path.pathOffset.x * scale,
-    origin.y + path.pathOffset.y * scale,
+    turn.cos * scale,
+    turn.sin * scale,
+    -turn.sin * scale,
+    turn.cos * scale,
+    origin.x + centre.x,
+    origin.y + centre.y,
   ]);
   path.setCoords();
+}
+
+/**
+ * Places a rectangle given along the axes of the drawing, in pixels from the middle of the screen (see
+ * `viewBounds`), turned with the view around the middle. In a straight view its 1-pixel line lies on whole
+ * pixels. A side far beyond the screen is drawn just outside it, since the canvas computes with single
+ * precision. Returns `false` when the rectangle cannot be seen.
+ */
+function placeTurnedBox(rect: Rect, box: ScreenBounds, turn: Turn, viewport: Viewport): boolean {
+  const middle = { x: viewport.width / 2, y: viewport.height / 2 };
+  const reach = Math.hypot(middle.x, middle.y) + OFF_SCREEN_MARGIN; // the screen is this close to the middle, whatever the turn
+  if (box.right < -reach || box.left > reach || box.bottom < -reach || box.top > reach) return false;
+  // a line centred on a half pixel covers whole pixels
+  const side = (value: number, centre: number): number => Math.round(centre + Math.min(reach, Math.max(-reach, value))) + 0.5 - centre;
+  const left = side(box.left, middle.x);
+  const right = side(box.right, middle.x);
+  const top = side(box.top, middle.y);
+  const bottom = side(box.bottom, middle.y);
+  const centre = turned(turn, (left + right) / 2, (top + bottom) / 2);
+  rect.set({ width: right - left, height: bottom - top });
+  util.applyTransformToObject(rect, [turn.cos, turn.sin, -turn.sin, turn.cos, middle.x + centre.x, middle.y + centre.y]);
+  rect.setCoords();
+  return true;
 }
 
 /**

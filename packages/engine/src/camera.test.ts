@@ -7,13 +7,17 @@ import {
   ORIGIN,
   createCamera,
   log2Scale,
+  normalizeAngle,
   pan,
+  rotateAt,
   scale,
   screenToWorld,
+  shortestAngle,
+  turnOf,
   worldToScreen,
   zoomAt,
 } from "./camera";
-import { dyadic, equals, significantBits } from "./dyadic";
+import { dyadic, equals, fromNumber, significantBits } from "./dyadic";
 import { createRandom } from "./test-utils";
 
 const viewport: Viewport = { width: 800, height: 600 };
@@ -230,6 +234,13 @@ describe("zoomAt", () => {
     expect(samePoint(camera.center, panned.center)).toBe(true);
   });
 
+  it("keeps the anchor exactly in a turned view", () => {
+    const start = createCamera({ angle: 33 });
+    const target = screenToWorld(start, viewport, anchor);
+    const deep = repeatZoom(start, anchor, 1.7, 300);
+    expect(samePoint(screenToWorld(deep, viewport, anchor), target)).toBe(true);
+  });
+
   it("grows the center's precision with the depth, about one bit per level", () => {
     const random = createRandom(13);
     const anchorPoint = { x: random.next() * 800, y: random.next() * 600 };
@@ -237,5 +248,80 @@ describe("zoomAt", () => {
     const bits = significantBits(camera.center.x);
     expect(bits).toBeGreaterThan(400);
     expect(bits).toBeLessThan(700);
+  });
+});
+
+describe("turning the view", () => {
+  const anchor: ScreenPoint = { x: 123.4, y: 567.8 };
+
+  it("brings angles into [0, 360), and finds the shortest way to turn", () => {
+    expect(normalizeAngle(-90)).toBe(270);
+    expect(normalizeAngle(720)).toBe(0);
+    expect(Object.is(normalizeAngle(-0), 0)).toBe(true);
+    expect(normalizeAngle(-1e-20)).toBe(0); // would round to 360
+    expect(shortestAngle(270)).toBe(-90);
+    expect(shortestAngle(180)).toBe(180);
+    expect(createCamera({ angle: -30 }).angle).toBe(330);
+    expect(() => normalizeAngle(Number.NaN)).toThrow(RangeError);
+  });
+
+  it("gives exact quarter turns", () => {
+    expect(turnOf(90)).toEqual({ cos: 0, sin: 1 });
+    expect(turnOf(-180)).toEqual({ cos: -1, sin: 0 });
+    expect(turnOf(270)).toEqual({ cos: 0, sin: -1 });
+    expect(turnOf(360)).toEqual({ cos: 1, sin: 0 });
+  });
+
+  it("turns the drawing clockwise on the screen, around the middle", () => {
+    const quarter = createCamera({ angle: 90 });
+    // the world's x axis now points down the screen, and its y axis to the left
+    expect(worldToScreen(quarter, viewport, { x: fromNumber(10), y: fromNumber(0) })).toEqual({ x: 400, y: 310 });
+    expect(worldToScreen(quarter, viewport, { x: fromNumber(0), y: fromNumber(10) })).toEqual({ x: 390, y: 300 });
+    expect(samePoint(screenToWorld(quarter, viewport, { x: 400, y: 310 }), { x: fromNumber(10), y: fromNumber(0) })).toBe(true);
+    // a point too far for a number, straight along the turned axis: still exactly on the middle column
+    expect(worldToScreen(quarter, viewport, { x: dyadic(1n, -2000), y: fromNumber(0) })).toEqual({ x: 400, y: Infinity });
+    const thirty = createCamera({ angle: 30 });
+    const shown = worldToScreen(thirty, viewport, { x: fromNumber(100), y: fromNumber(0) });
+    expect(shown.x).toBeCloseTo(400 + 100 * Math.cos(Math.PI / 6), 12);
+    expect(shown.y).toBeCloseTo(300 + 100 * Math.sin(Math.PI / 6), 12);
+  });
+
+  it("goes back from the screen to the world in a turned view", () => {
+    const random = createRandom(21);
+    for (let i = 0; i < 200; i++) {
+      const camera = createCamera({ angle: random.next() * 360, zLevel: random.int(40) - 20, factor: 1 + random.next() });
+      const p = { x: random.next() * 800, y: random.next() * 600 };
+      const back = worldToScreen(camera, viewport, screenToWorld(camera, viewport, p));
+      expect(Math.abs(back.x - p.x)).toBeLessThan(1e-9);
+      expect(Math.abs(back.y - p.y)).toBeLessThan(1e-9);
+    }
+  });
+
+  it("keeps the world point under the anchor exactly, whatever the angle", () => {
+    const random = createRandom(22);
+    let camera = createCamera({ zLevel: 30, factor: 1.3 });
+    const target = screenToWorld(camera, viewport, anchor);
+    for (let i = 0; i < 500; i++) camera = rotateAt(camera, viewport, anchor, random.next() * 720 - 360);
+    expect(samePoint(screenToWorld(camera, viewport, anchor), target)).toBe(true);
+    const shown = worldToScreen(camera, viewport, target);
+    expect(Math.abs(shown.x - anchor.x)).toBeLessThan(1e-9);
+    expect(Math.abs(shown.y - anchor.y)).toBeLessThan(1e-9);
+  });
+
+  it("makes four quarter turns around the middle a full turn, exactly", () => {
+    const start = createCamera({ center: { x: dyadic(5n, 3), y: dyadic(-7n, 2) }, angle: 12.5 });
+    let camera = start;
+    for (let i = 0; i < 4; i++) camera = rotateAt(camera, viewport, middle, 90);
+    expect(camera.angle).toBe(12.5);
+    expect(samePoint(camera.center, start.center)).toBe(true);
+  });
+
+  it("pans along the screen, not along the world, in a turned view", () => {
+    const quarter = createCamera({ angle: 90 });
+    const point = { x: fromNumber(10), y: fromNumber(0) };
+    const moved = pan(quarter, 7, -3);
+    const before = worldToScreen(quarter, viewport, point);
+    const after = worldToScreen(moved, viewport, point);
+    expect(after).toEqual({ x: before.x + 7, y: before.y - 3 });
   });
 });

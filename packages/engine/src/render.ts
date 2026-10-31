@@ -139,13 +139,17 @@ export function drawableProjection(
 
   const extent = sectionExtent(section);
   const half = extent.maxWidth / 2;
-  const { origin, scale } = projection;
+  const { origin, scale, turn } = projection;
   const reach = Math.max(Math.abs(extent.minX), Math.abs(extent.maxX), Math.abs(extent.minY), Math.abs(extent.maxY)) + half;
   if (reach * scale > maxReachPixels) return null;
-  const left = origin.x + (extent.minX - half) * scale;
-  const right = origin.x + (extent.maxX + half) * scale;
-  const top = origin.y + (extent.minY - half) * scale;
-  const bottom = origin.y + (extent.maxY + half) * scale;
+  // the box of the ink, turned with the view: on the screen, the box around it
+  const [x0, x1, y0, y1] = [extent.minX - half, extent.maxX + half, extent.minY - half, extent.maxY + half];
+  const least = (a: number, b: number): number => (a >= 0 ? a * x0 : a * x1) + (b >= 0 ? b * y0 : b * y1);
+  const most = (a: number, b: number): number => (a >= 0 ? a * x1 : a * x0) + (b >= 0 ? b * y1 : b * y0);
+  const left = origin.x + least(turn.cos, -turn.sin) * scale;
+  const right = origin.x + most(turn.cos, -turn.sin) * scale;
+  const top = origin.y + least(turn.sin, turn.cos) * scale;
+  const bottom = origin.y + most(turn.sin, turn.cos) * scale;
 
   if (Math.max(right - left, bottom - top) < minPixels) return null;
   if (right < 0 || left > viewport.width || bottom < 0 || top > viewport.height) return null;
