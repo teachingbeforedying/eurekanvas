@@ -101,6 +101,16 @@ export class Rope {
     this.samples = [];
   }
 
+  /**
+   * The view was mirrored across the line through `pivot` at `lineAngle` degrees (clockwise from the x axis of the
+   * screen): the brush keeps its place on the drawing, as with `shifted`. Such a mirror is `R(2 · lineAngle) · M`.
+   */
+  mirrored(pivot: ScreenPoint, lineAngle: number): void {
+    const offset = turned(turnOf(2 * lineAngle), this.brush.x - pivot.x, pivot.y - this.brush.y);
+    this.brush = { x: pivot.x + offset.x, y: pivot.y + offset.y };
+    this.samples = [];
+  }
+
   private initialLength(): number {
     return this.lag > 0 ? Math.min(MIN_SPEED_ROPE, this.length) : this.length;
   }

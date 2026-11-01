@@ -45,9 +45,9 @@ export interface ScreenBounds {
 
 /**
  * A rectangle whose sides follow axes turned by `-angle` degrees: a world point `w` is in it when its coordinates
- * `R(angle) · (w - origin)`, computed exactly, are in `bounds`. A rectangle dragged on the screen is one, with the
- * camera's center and angle (its sides follow the screen); so is the frame of an object turned by `-angle`. With
- * an angle of 0, it is the plain rectangle `origin + bounds`.
+ * `R(angle) · (w - origin)`, computed exactly, are in `bounds`. A rectangle dragged on the screen is one (see
+ * `screenRectangle`: its sides follow the screen); so is the frame of an object turned by `-angle`. With an angle
+ * of 0, it is the plain rectangle `origin + bounds`.
  */
 export interface OrientedRectangle {
   readonly origin: Point;
@@ -173,6 +173,16 @@ export function orientedRectangle(a: Point, b: Point, origin: Point, angle: numb
   return { origin, angle, bounds: boundsFromCorners(viewCoordinates(a, origin, turn), viewCoordinates(b, origin, turn)) };
 }
 
+/**
+ * The rectangle whose sides follow the screen, with these two opposite corners, given as world points. In a
+ * mirrored view, the screen shows `R(angle) · M · d` for an offset `d` from the center, and
+ * `M · R(angle) · M = R(−angle)`: the coordinates `R(−angle) · d` are the screen's with the y axis flipped, so a
+ * rectangle along the screen's sides is a rectangle in them too.
+ */
+export function screenRectangle(camera: Camera, a: Point, b: Point): OrientedRectangle {
+  return orientedRectangle(a, b, camera.center, camera.mirror ? normalizeAngle(-camera.angle) : camera.angle);
+}
+
 /** A plain rectangle of the world, as an `OrientedRectangle` with an angle of 0. */
 export function worldRectangle(bounds: WorldBounds): OrientedRectangle {
   return { origin: ORIGIN, angle: 0, bounds };
@@ -290,7 +300,9 @@ export function rectangleOnScreen(camera: Camera, viewport: Viewport, rectangle:
     center: worldToScreen(camera, viewport, rectangleCenter(rectangle)),
     width: pixels(sub(bounds.maxX, bounds.minX)),
     height: pixels(sub(bounds.maxY, bounds.minY)),
-    angle: normalizeAngle(camera.angle - rectangle.angle),
+    // a point `R(−angle) · r` of the rectangle appears at `R(camera) · M · R(−angle) · r = R(camera ± angle) · M · r`,
+    // and the mirror `M` leaves the sides of a rectangle where they are
+    angle: normalizeAngle(camera.angle + (camera.mirror ? rectangle.angle : -rectangle.angle)),
   };
 }
 

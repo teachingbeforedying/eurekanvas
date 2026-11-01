@@ -16,7 +16,8 @@ Version 3 has not been published yet and has no known reader outside this projec
     "center": { "x": "3/2^-4", "y": "-5/2^700" },
     "zLevel": 12,
     "factor": 1.5,
-    "angle": 30
+    "angle": 30,
+    "mirror": false
   },
   "items": [
     { "format": "eurekanvas/stroke", "version": 1, "sections": ["..."] },
@@ -50,6 +51,7 @@ Version 3 has not been published yet and has no known reader outside this projec
 | `view.zLevel` | integer | The integer part of the zoom, as in a stroke. |
 | `view.factor` | number | The rest of the zoom: a positive, finite double. |
 | `view.angle` | number | Optional, `0` when absent: how far the view is turned, in degrees. A finite double. |
+| `view.mirror` | boolean | Optional, `false` when absent: whether the view shows the drawing in a mirror. |
 | `items` | array | The objects, in drawing order: a later object is drawn over an earlier one. May be empty. |
 | an object | object | Either a stroke, a valid `eurekanvas/stroke` document (it has a `format` field), or a group: an object with a `group` field and no `format` field. |
 | `group` | array | The objects of the group, in drawing order: at least one. Groups can be nested. |
@@ -68,6 +70,7 @@ A reader ignores unknown extra fields, in the envelope, in groups and in strokes
 - The view shows `scale = 2^zLevel * factor` screen pixels per world unit, with `view.center` at the middle of the screen. The size of the screen is not stored: a reader shows the same centre at the same scale on whatever screen it has.
 - A writer writes `factor` in [1, 2). A reader accepts any positive, finite `factor` and brings it into [1, 2) by halving or doubling it while adding 1 to or subtracting 1 from `zLevel`. This keeps the scale unchanged and loses nothing, since a power of two is exact in a double.
 - The view turns the drawing clockwise on the screen by `angle` degrees, around the middle of the screen: a world offset `(dx, dy)` from `view.center` appears at `(cos a · dx - sin a · dy, sin a · dx + cos a · dy) · scale` from the middle (the y axis points down, in the world as on the screen). A writer writes `angle` in [0, 360); a reader accepts any finite angle and brings it into [0, 360). Quarter turns (0, 90, 180, 270) use the exact values 0 and ±1 for the cosine and the sine. A reader of an earlier implementation ignores `angle` and shows the view straight, which loses no object: `angle` came in version 2 without changing it.
+- With `mirror` true, the view also shows the drawing in a mirror: a world offset `(dx, dy)` first becomes `(dx, −dy)`, then is turned by `angle` as above, as in a transform (below). A view mirrored from left to right, its top still at the top, has an `angle` of 180. A reader of an earlier implementation ignores `mirror` and shows the view without it, which loses no object: `mirror` came in version 3 without changing it.
 - A group says that its objects are handled as one (selected, moved, copied together). Without a transform, it does not change how they are drawn: the drawing order of all strokes is the order in which they appear when the groups are flattened.
 - A transform places a point `p` of its object at `position + 2^zLevel · factor · R(angle) · M · (p − origin)`, where `R(a) = [cos a, −sin a; sin a, cos a]` turns clockwise on the screen (as for the view), and `M` is `(x, y) → (x, −y)` when `mirror` is true, the identity otherwise. Only the difference `p − origin` is turned and scaled: a writer puts the pivot near the object, so that the rounding of the cosine and the sine stays relative to the size of the object, at any depth. Quarter turns use the exact values 0 and ±1. A writer writes `factor` in [1, 2) and `angle` in [0, 360); a reader brings them there as for the view.
 - The transform of a group applies to its objects after their own transforms: a stroke inside groups is placed by its own transform, then by the one of its group, and so on outwards.

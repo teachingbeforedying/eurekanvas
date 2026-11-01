@@ -7,6 +7,7 @@ import {
   ORIGIN,
   createCamera,
   log2Scale,
+  mirrorAt,
   normalizeAngle,
   pan,
   rotateAt,
@@ -14,6 +15,7 @@ import {
   screenToWorld,
   shortestAngle,
   turnOf,
+  uprightAngle,
   worldToScreen,
   zoomAt,
 } from "./camera";
@@ -323,5 +325,73 @@ describe("turning the view", () => {
     const before = worldToScreen(quarter, viewport, point);
     const after = worldToScreen(moved, viewport, point);
     expect(after).toEqual({ x: before.x + 7, y: before.y - 3 });
+  });
+});
+
+describe("mirroring the view", () => {
+  const anchor: ScreenPoint = { x: 123.4, y: 567.8 };
+  const point = { x: fromNumber(10), y: fromNumber(5) };
+
+  function close(a: ScreenPoint, b: ScreenPoint): void {
+    expect(Math.abs(a.x - b.x)).toBeLessThan(1e-9);
+    expect(Math.abs(a.y - b.y)).toBeLessThan(1e-9);
+  }
+
+  it("shows the drawing in a mirror, its top still at the top at the upright angle", () => {
+    const leftRight = createCamera({ angle: uprightAngle(true), mirror: true });
+    // the world's x axis now points to the left, and its y axis still down
+    expect(worldToScreen(leftRight, viewport, { x: fromNumber(10), y: fromNumber(0) })).toEqual({ x: 390, y: 300 });
+    expect(worldToScreen(leftRight, viewport, { x: fromNumber(0), y: fromNumber(10) })).toEqual({ x: 400, y: 310 });
+    expect(samePoint(screenToWorld(leftRight, viewport, { x: 390, y: 300 }), { x: fromNumber(10), y: fromNumber(0) })).toBe(true);
+    const topBottom = createCamera({ mirror: true });
+    expect(worldToScreen(topBottom, viewport, { x: fromNumber(10), y: fromNumber(0) })).toEqual({ x: 410, y: 300 });
+    expect(worldToScreen(topBottom, viewport, { x: fromNumber(0), y: fromNumber(10) })).toEqual({ x: 400, y: 290 });
+    expect(uprightAngle(false)).toBe(0);
+    expect(createCamera().mirror).toBe(false);
+  });
+
+  it("goes back from the screen to the world in a mirrored, turned view", () => {
+    const random = createRandom(23);
+    for (let i = 0; i < 200; i++) {
+      const camera = createCamera({ angle: random.next() * 360, zLevel: random.int(40) - 20, factor: 1 + random.next(), mirror: true });
+      const p = { x: random.next() * 800, y: random.next() * 600 };
+      close(worldToScreen(camera, viewport, screenToWorld(camera, viewport, p)), p);
+    }
+  });
+
+  it("swaps left and right, or top and bottom, as seen on the screen, in a turned view", () => {
+    const thirty = createCamera({ angle: 30, zLevel: 2 });
+    const seen = worldToScreen(thirty, viewport, point);
+    close(worldToScreen(mirrorAt(thirty, viewport, middle, 90), viewport, point), { x: 800 - seen.x, y: seen.y });
+    close(worldToScreen(mirrorAt(thirty, viewport, middle, 0), viewport, point), { x: seen.x, y: 600 - seen.y });
+    // and back, from a mirrored view
+    const mirrored = mirrorAt(thirty, viewport, middle, 90);
+    close(worldToScreen(mirrorAt(mirrored, viewport, middle, 0), viewport, point), { x: 800 - seen.x, y: 600 - seen.y });
+  });
+
+  it("keeps the world point under the anchor exactly, and twice the same mirror gives back the same camera", () => {
+    const random = createRandom(24);
+    let camera = createCamera({ zLevel: 30, factor: 1.3, angle: 12.5 });
+    const target = screenToWorld(camera, viewport, anchor);
+    for (let i = 0; i < 100; i++) camera = mirrorAt(camera, viewport, anchor, random.next() * 360);
+    expect(samePoint(screenToWorld(camera, viewport, anchor), target)).toBe(true);
+    const start = createCamera({ center: { x: dyadic(5n, 3), y: dyadic(-7n, 2) }, angle: 12.5 });
+    const twice = mirrorAt(mirrorAt(start, viewport, middle, 90), viewport, middle, 90);
+    expect(twice).toEqual(start);
+    const across = mirrorAt(mirrorAt(start, viewport, anchor, 0), viewport, anchor, 0);
+    expect(across.angle).toBe(12.5);
+    expect(across.mirror).toBe(false);
+    expect(samePoint(across.center, start.center)).toBe(true);
+  });
+
+  it("turns clockwise on the screen, pans along the screen and zooms around the anchor in a mirrored view", () => {
+    const mirrored = createCamera({ angle: 30, mirror: true, zLevel: 1 });
+    const seen = worldToScreen(mirrored, viewport, point);
+    const turned = worldToScreen(rotateAt(mirrored, viewport, middle, 90), viewport, point);
+    close(turned, { x: middle.x - (seen.y - middle.y), y: middle.y + (seen.x - middle.x) }); // clockwise, y down
+    const panned = worldToScreen(pan(mirrored, 7, -3), viewport, point);
+    close(panned, { x: seen.x + 7, y: seen.y - 3 });
+    const target = screenToWorld(mirrored, viewport, anchor);
+    expect(samePoint(screenToWorld(repeatZoom(mirrored, anchor, 1.7, 50), viewport, anchor), target)).toBe(true);
   });
 });

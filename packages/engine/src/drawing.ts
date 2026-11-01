@@ -62,6 +62,8 @@ export interface DrawingJSON {
     readonly factor: number;
     /** Degrees in [0, 360). Optional when read: 0 by default. */
     readonly angle: number;
+    /** Optional when read: `false` by default. */
+    readonly mirror: boolean;
   };
   readonly items: readonly ItemJSON[];
 }
@@ -79,11 +81,11 @@ function itemToJSON(item: Item): ItemJSON {
 }
 
 export function drawingToJSON(drawing: Drawing): DrawingJSON {
-  const { center, zLevel, factor, angle } = drawing.view;
+  const { center, zLevel, factor, angle, mirror } = drawing.view;
   return {
     format: DRAWING_FORMAT,
     version: DRAWING_FORMAT_VERSION,
-    view: { center: { x: dyadicToString(center.x), y: dyadicToString(center.y) }, zLevel, factor, angle },
+    view: { center: { x: dyadicToString(center.x), y: dyadicToString(center.y) }, zLevel, factor, angle, mirror },
     items: drawing.items.map(itemToJSON),
   };
 }
@@ -157,6 +159,8 @@ export function drawingFromJSON(json: unknown): Drawing {
   if (typeof factor !== "number" || !(Number.isFinite(factor) && factor > 0)) fail("the view needs a positive, finite factor");
   const angle = view["angle"] ?? 0;
   if (typeof angle !== "number" || !Number.isFinite(angle)) fail("the angle of the view must be a finite number");
+  const mirror = view["mirror"] ?? false;
+  if (typeof mirror !== "boolean") fail("the mirror of the view must be true or false");
 
   let items: Item[];
   if (version === 1) {
@@ -170,5 +174,5 @@ export function drawingFromJSON(json: unknown): Drawing {
   }
 
   const exactCenter = { x: dyadicFromString(center["x"]), y: dyadicFromString(center["y"]) };
-  return { items, view: createCamera({ center: exactCenter, zLevel, factor, angle }) }; // brings the factor into [1, 2), the angle into [0, 360)
+  return { items, view: createCamera({ center: exactCenter, zLevel, factor, angle, mirror }) }; // brings the factor into [1, 2), the angle into [0, 360)
 }

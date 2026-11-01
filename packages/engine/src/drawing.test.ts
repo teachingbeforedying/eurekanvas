@@ -60,7 +60,7 @@ describe("drawing JSON form", () => {
     expect(drawingToJSON({ items: [stroke, { items: [stroke] }], view: createCamera() })).toEqual({
       format: "eurekanvas/drawing",
       version: 3,
-      view: { center: { x: "0/2^0", y: "0/2^0" }, zLevel: 0, factor: 1, angle: 0 },
+      view: { center: { x: "0/2^0", y: "0/2^0" }, zLevel: 0, factor: 1, angle: 0, mirror: false },
       items: [strokeToJSON(stroke), { group: [strokeToJSON(stroke)] }],
     });
   });
@@ -111,6 +111,18 @@ describe("drawing JSON form", () => {
     Object.assign(json.view, { angle: -90 });
     expect(drawingFromJSON(json).view.angle).toBe(270);
     Object.assign(json.view, { angle: "90" });
+    expect(() => drawingFromJSON(json)).toThrow(SyntaxError);
+  });
+
+  it("keeps the mirror of the view, and reads a view without one as not mirrored", () => {
+    const mirrored: Drawing = { items: [small()], view: createCamera({ angle: 180, mirror: true }) };
+    expect(drawingFromJSON(JSON.parse(JSON.stringify(drawingToJSON(mirrored))))).toEqual(mirrored);
+    const json = valid();
+    delete (json.view as { mirror?: unknown }).mirror;
+    expect(drawingFromJSON(json).view.mirror).toBe(false);
+    Object.assign(json.view, { mirror: true });
+    expect(drawingFromJSON(json).view.mirror).toBe(true);
+    Object.assign(json.view, { mirror: "true" });
     expect(() => drawingFromJSON(json)).toThrow(SyntaxError);
   });
 

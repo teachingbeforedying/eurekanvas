@@ -376,6 +376,21 @@ Sébastien veut la rotation tôt : dans l'ancienne version, il l'avait faite tar
 - Le miroir vient dans cette livraison, comme avant : `F`+`H` retourne la sélection de gauche à droite, `F`+`V` de haut en bas, autour du centre de son cadre (L75742, L76271 dans l'ancienne version).
 - `R` + relâcher `Espace` avec une sélection : chaque objet tourne sur place, autour de son propre centre, jusqu'à apparaître droit à l'écran (vue droite : il est remis droit). Le miroir n'est pas touché. C'est la seule exception au « tout en bloc ».
 
+**Miroir de la vue** (2026-11-01). Sébastien avait demandé « f+h et f+g sans sélection » ; `F`+`G` était une erreur, il voulait `F`+`H` et `F`+`V`. L'ancienne version n'avait pas de miroir de la vue : sans sélection, `F`+`H` n'y faisait rien.
+- **Sans sélection**, `F`+`H` / `F`+`V` retournent la vue, de gauche à droite ou de haut en bas tels qu'on les voit, autour du milieu de l'écran. La caméra porte un miroir ; les objets ne changent pas.
+  - Avec une sélection, ils la retournent, comme avant. Avec Maj, ils retournent la vue même avec une sélection, comme `R`+Maj. `F`+`G` ne fait rien.
+  - Comme pour l'angle, `Ctrl+Z` ne l'annule pas (la vue n'est pas une action). Un message bref le dit.
+- **`F` + relâcher `Espace`** remet à l'endroit et droit.
+  - Sans sélection, la vue perd son miroir et revient à 0°. Avec une sélection, chaque objet devient à l'endroit et droit à l'écran, autour de son propre centre.
+  - Toujours, même sans miroir : c'est `R` + relâcher `Espace`, plus le miroir enlevé.
+  - Pourquoi redresser aussi : pour enlever un miroir, on retourne soit de gauche à droite, soit de haut en bas, et les deux résultats diffèrent d'un demi-tour. Redresser en même temps lève l'ambiguïté.
+- **Pendant un trait**, `F` tenu met le trait en pause, comme `R`. Le bout du pinceau suit le dessin retourné.
+- **Droit, pour ce qui est retourné** : le haut en haut, gauche et droite inversés, comme un texte vu dans un miroir posé à côté. `R` + relâcher `Espace` suit cette règle, pour une vue retournée comme pour un objet retourné.
+  - C'est une correction : avant, après `F`+`H` sur un objet droit, `R` + `Espace` lui faisait faire un demi-tour, et il apparaissait à l'envers.
+- **Mes choix, par cohérence** (à faire juger) :
+  - dans une vue retournée, les gestes restent tels qu'on les voit à l'écran : `R` + souris, `R`+`H` (dans le sens des aiguilles d'une montre à l'écran), `R` + bouton gauche, `F`+`H`/`V` sur la sélection ;
+  - `0` remet aussi la vue à l'endroit.
+
 ## Étape 1 de la sélection : groupes, touche `²`, interface (2026-10-25)
 
 - **Objets** (`packages/engine/src/drawing.ts`) : `Item = Stroke | Group`, avec des groupes emboîtables.
@@ -496,6 +511,35 @@ Toutes sont tuées ensuite.
 - il manquait des tests pour le miroir et le facteur dans le rendu, le clic et le rectangle, pour l'ordre de composition avec un groupe, et pour un objet déjà tourné dans un groupe qu'on défait.
 
 **Note** : mes scripts Python d'édition avaient écrit des fins de ligne CRLF dans cinq fichiers (Windows, mode texte). Elles sont remises en LF ; les scripts écrivent maintenant avec `newline=""`.
+
+## Miroir de la vue (2026-11-01)
+
+Décisions dans « La rotation : décisions », paragraphe « Miroir de la vue ».
+
+- **Caméra** (`packages/engine/src/camera.ts`) : un miroir `M`, comme celui d'une transformation. Un décalage `d` du monde apparaît à `R(angle) · M · d · échelle` du milieu de l'écran.
+  - Une vue retournée de gauche à droite, le haut toujours en haut, est `R(180) · M` : `uprightAngle` donne cet angle « droit » (0 sans miroir, 180 avec), pour la vue comme pour un objet.
+  - `mirrorAt` retourne la vue le long d'une droite de l'écran (90 : gauche-droite, 0 : haut-bas) en gardant exactement le point du monde sous l'ancre, par le même argument que `zoomAt`. Deux fois le même miroir redonnent exactement la même caméra.
+  - Le miroir ne touche que le signe d'un petit décalage en pixels : la précision ne change pas, à toute profondeur.
+- **Sections, clic, rendu** : la projection d'une section combine la vue et l'objet comme `composeTransforms` (`M · R(a) = R(−a) · M`). Le clic, le choix de ce qu'on dessine et le rendu fabric passent tous par elle.
+- **Rectangle** : `screenRectangle` donne le rectangle tiré à l'écran. Dans une vue retournée, ses coordonnées sont `R(−angle) · d`, celles de l'écran au signe de y près. `rectangleOnScreen` tourne le cadre dans l'autre sens.
+- **Format** : `view.mirror`, facultatif. Un lecteur plus ancien l'ignore et montre la vue sans miroir, sans perdre d'objet : la version reste 3.
+- **Éditeur et page** :
+  - `F`+`H` / `F`+`V` sans sélection, ou avec Maj : miroir de la vue autour du milieu de l'écran, avec un message.
+  - `F` + relâcher `Espace` : `uprightView` (miroir le long de la droite à angle/2 de l'écran, qui laisse exactement 0°, ou bien un redressement) ; avec une sélection, `uprightSelection`.
+  - `R` + relâcher `Espace` vise `uprightAngle` : la correction de l'objet retourné qui finissait à l'envers.
+  - Les gestes de la sélection passent de l'écran au monde par `worldTurn` (un tour change de sens dans une vue retournée) et `worldAngle` (la direction du monde qu'on voit à un angle de l'écran).
+  - `F` tenu met le trait en pause ; `Rope.mirrored` garde le bout du pinceau sur le dessin. `0` remet aussi la vue sans miroir. Le panneau affiche « mirrored ».
+- **Conséquence de la règle « à l'endroit à l'écran »** : un objet tracé dans une vue retournée n'a pas de miroir, donc il paraît retourné pour `F` + `Espace`, qui lui en donne un. `R` + `Espace`, lui, le laisse : son haut est déjà en haut.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements synthétiques, panneau visible) :
+- `F`+`H` sans sélection : le côté du L passe à gauche, le message s'affiche, le panneau ne s'ouvre pas ;
+- `R`+Maj+`H` dans une vue retournée : 270° ; `R` + `Espace` : 180°, toujours retournée ; `F` + `Espace` : 0°, sans miroir ;
+- avec une sélection : `F`+`H` retourne l'objet, pas la vue ; `F`+Maj+`V` retourne la vue ; `F` + `Espace` met l'objet à l'endroit à l'écran ;
+- un trait en pause pendant `F`, puis repris ; la sauvegarde automatique contient `view.mirror`, qui revient après un rechargement ; `0` l'enlève ; aucune erreur.
+
+**Contrôle par mutation** : 36 modifications volontaires, toutes tuées à la fin. Au premier passage, 3 survivaient :
+- dans une vue retournée à 180°, `c − ψ` et `ψ − c` donnent la même droite : un test dans une vue retournée et tournée de 30° les sépare ;
+- le test de pause tirait la corde vers un pointeur aligné avec le bout du trait, donc au même endroit avec ou sans `Rope.mirrored` : le pointeur est maintenant à côté.
 
 ## Critères de réussite du tronçon
 

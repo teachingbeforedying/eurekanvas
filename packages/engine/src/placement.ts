@@ -77,7 +77,7 @@ function collect(item: Item, outer: Transform | null, into: PlacedSection[]): vo
 
 /**
  * Where the local points of a placed section appear on the screen: `origin + scale · R · M · local`, with the
- * turn `R` of the camera and of the section together, and `M` the mirror.
+ * turn `R` and the mirror `M` of the camera and of the section together.
  */
 export interface SectionProjection {
   readonly origin: ScreenPoint;
@@ -99,7 +99,9 @@ export function projectSection(placed: PlacedSection, camera: Camera, viewport: 
   const origin = worldToScreen(camera, viewport, placed.anchor);
   const scale = 2 ** (camera.zLevel - placed.zLevel) * camera.factor * placed.factor;
   if (!(Number.isFinite(origin.x) && Number.isFinite(origin.y) && Number.isFinite(scale) && scale > 0)) return null;
-  return { origin, scale, turn: turnOf(camera.angle + placed.angle), mirror: placed.mirror };
+  // M · R(a) = R(−a) · M: a mirrored view turns the section the other way, as in `composeTransforms`
+  const angle = camera.angle + (camera.mirror ? -placed.angle : placed.angle);
+  return { origin, scale, turn: turnOf(angle), mirror: camera.mirror !== placed.mirror };
 }
 
 export function localToScreen(projection: SectionProjection, local: { readonly x: number; readonly y: number }): ScreenPoint {

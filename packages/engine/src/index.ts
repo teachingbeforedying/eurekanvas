@@ -95,6 +95,7 @@ export {
   orientedRectangle,
   rectangleCenter,
   rectangleOnScreen,
+  screenRectangle,
   selectionFrame,
   unionBounds,
   worldRectangle,
@@ -109,6 +110,7 @@ export {
   ORIGIN,
   createCamera,
   log2Scale,
+  mirrorAt,
   normalizeAngle,
   normalizeZoom,
   pan,
@@ -119,6 +121,7 @@ export {
   turnOf,
   turned,
   unturned,
+  uprightAngle,
   worldToScreen,
   zoomAt,
 } from "./camera";

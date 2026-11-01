@@ -25,19 +25,21 @@ import {
   itemStrokes,
   itemsAt,
   itemsInRectangle,
+  mirrorAt,
   mirroredAcross,
-  orientedRectangle,
   pan,
   placedAlone,
   placedSections,
   rectangleCenter,
   rotateAt,
+  screenRectangle,
   screenToWorld,
   selectDrawableSections,
   selectionFrame,
   shift,
   shortestAngle,
   turnedAround,
+  uprightAngle,
   withTransform,
   worldToScreen,
   zoomAt,
@@ -189,7 +191,11 @@ export interface EditorStats {
  *   thickness that makes it `STROKE_WIDTH_PIXELS` thick on the screen at that moment;
  * - with the turning key (`R`) held, the pointer turns the view around the middle of the screen, like a knob:
  *   by the angle it sweeps around the middle, in steps of `TURN_STEP_DEGREES` with Shift. Also while
- *   drawing: the stroke is paused, as when the view is moved.
+ *   drawing: the stroke is paused, as when the view is moved;
+ * - with the mirror key (`F`) held, the stroke is paused too, so that the view can be mirrored while drawing.
+ *
+ * The view may be mirrored. The gestures are what they look like on the screen: a turn clockwise on the screen,
+ * a mirror from left to right on the screen, an object straight on the screen.
  *
  * The pen can be smoothed with a rope (see `Rope` and `Pen`): the stroke follows the pointer at a distance of
  * at most the rope length, which removes the tremor of a hand. Without a rope the stroke goes through every
@@ -209,6 +215,8 @@ export class Editor {
   };
   private recorder: StrokeRecorder | null = null;
   private drawKeyHeld = false;
+  /** The mirror key (`F`) is held: the stroke being drawn is paused. */
+  private mirrorKeyHeld = false;
   /**
    * While the drawing key is held (and until the stroke it was held for ends): how many strokes were drawn,
    * each one its own action, still in the drawing. They become one object when the hold ends.
@@ -389,6 +397,8 @@ export class Editor {
       this._camera = pan(this._camera, dx, dy);
       // the content follows the pointer, and so does the end of the stroke that is paused
       if (this.recorder) this.rope.shifted(dx, dy);
+    } else if (this.recorder && this.mirrorKeyHeld) {
+      // paused: the stroke goes on from where it was when the key is released
     } else if (this.recorder) {
       const brush = this.rope.move(p, time);
       if (brush) this.recorder.addScreenPoint(this._camera, this._viewport, brush, STROKE_WIDTH_PIXELS);
@@ -471,7 +481,7 @@ export class Editor {
     const from = worldToScreen(this._camera, this._viewport, press.start);
     const end = screenToWorld(this._camera, this._viewport, this.last);
     // its sides follow the screen, so they follow the view when it is turned
-    const rectangle = orientedRectangle(press.start, end, this._camera.center, this._camera.angle);
+    const rectangle = screenRectangle(this._camera, press.start, end);
     const taken = itemsInRectangle(this.finished, rectangle, rectangleMode(from, this.last));
     const items = taken.map((index) => this.finished[index] as Item);
     this.select(press.shift ? [...this._selection, ...items] : items);
@@ -493,11 +503,10 @@ export class Editor {
    */
   selectOnScreen(): SelectionReport {
     const corner = { x: this._viewport.width, y: this._viewport.height };
-    const screen = orientedRectangle(
+    const screen = screenRectangle(
+      this._camera,
       screenToWorld(this._camera, this._viewport, { x: 0, y: 0 }),
       screenToWorld(this._camera, this._viewport, corner),
-      this._camera.center,
-      this._camera.angle,
     );
     this.select(itemsInRectangle(this.finished, screen, "touching").map((index) => this.finished[index] as Item));
     return this.report();
@@ -579,7 +588,7 @@ export class Editor {
   turnSelection(degrees: number): number {
     const center = this.selectionCenter();
     if (center === null) return 0;
-    return this.changeSelected((item) => turnedItem(item, center, degrees));
+    return this.changeSelected((item) => turnedItem(item, center, this.worldTurn(degrees)));
   }
 
   /**
@@ -590,21 +599,22 @@ export class Editor {
     const center = this.selectionCenter();
     if (center === null) return 0;
     // the line, vertical or horizontal on the screen, in the world's axes
-    const line = (direction === "leftRight" ? 90 : 0) - this._camera.angle;
+    const line = this.worldAngle(direction === "leftRight" ? 90 : 0);
     return this.changeSelected((item) => withTransform(item, mirroredAcross(transformOf(item), center, line)));
   }
 
   /**
-   * Turns each selected object around the center of its own frame until it looks straight on the screen (in a
-   * straight view: puts it back straight). Its mirror stays. One action. Returns how many objects turned; 0, doing
-   * nothing, when none had to, or while drawing.
+   * Turns each selected object around the center of its own frame until it looks straight on the screen, its top
+   * at the top (in a straight view: puts it back straight). Its mirror stays. One action. Returns how many objects
+   * turned; 0, doing nothing, when none had to, or while drawing.
    */
   alignSelection(): number {
     if (this.selectionCenter() === null) return 0;
     const turns = new Map<Item, number>();
     for (const item of this._selection) {
-      const degrees = shortestAngle(-this._camera.angle - (item.transform?.angle ?? 0));
-      if (degrees !== 0) turns.set(item, degrees);
+      const seen = this.onScreen(item);
+      const degrees = shortestAngle(uprightAngle(seen.mirror) - seen.angle);
+      if (degrees !== 0) turns.set(item, this.worldTurn(degrees));
     }
     if (turns.size === 0) return 0;
     this.changeSelected((item) => {
@@ -613,6 +623,51 @@ export class Editor {
       return degrees === undefined || frame === null ? item : turnedItem(item, rectangleCenter(frame), degrees);
     });
     return turns.size;
+  }
+
+  /**
+   * Puts each selected object the right way and straight on the screen, around the center of its own frame: one
+   * that looks mirrored is mirrored back, then each one is turned as by `alignSelection`. One action. Returns how
+   * many objects changed; 0, doing nothing, when none had to, or while drawing.
+   */
+  uprightSelection(): number {
+    if (this.selectionCenter() === null) return 0;
+    const changed = new Map<Item, Item>();
+    for (const item of this._selection) {
+      const frame = itemFrame(item);
+      if (frame === null) continue;
+      const center = rectangleCenter(frame);
+      const seen = this.onScreen(item);
+      if (seen.mirror) {
+        // `R(s) · M` on the screen: the mirror across the line at s/2 of the screen leaves `R(s − s)`, straight
+        changed.set(item, withTransform(item, mirroredAcross(transformOf(item), center, this.worldAngle(seen.angle / 2))));
+      } else {
+        const degrees = shortestAngle(-seen.angle);
+        if (degrees !== 0) changed.set(item, turnedItem(item, center, this.worldTurn(degrees)));
+      }
+    }
+    if (changed.size === 0) return 0;
+    this.changeSelected((item) => changed.get(item) ?? item);
+    return changed.size;
+  }
+
+  /** How an object looks on the screen: the angle and the mirror of its transform, seen through the view. */
+  private onScreen(item: Item): { readonly angle: number; readonly mirror: boolean } {
+    const { angle, mirror } = this._camera;
+    const own = item.transform?.angle ?? 0;
+    // M · R(a) = R(−a) · M: a mirrored view turns the object the other way
+    return { angle: angle + (mirror ? -own : own), mirror: mirror !== (item.transform?.mirror ?? false) };
+  }
+
+  /** A turn of the world that looks like a turn by `degrees` on the screen: the other way in a mirrored view. */
+  private worldTurn(degrees: number): number {
+    return this._camera.mirror ? -degrees : degrees;
+  }
+
+  /** The angle of the direction of the world that appears at `degrees` on the screen (clockwise from its x axis). */
+  private worldAngle(degrees: number): number {
+    const { angle, mirror } = this._camera;
+    return mirror ? angle - degrees : degrees - angle;
   }
 
   /** The exact center of the frame of the selection, after ending a hold of the drawing key; `null` when nothing can be changed. */
@@ -652,7 +707,7 @@ export class Editor {
     if (done === turning.done) return;
     turning.done = done;
     // from the objects as they were, so that nothing adds up
-    const turned = new Map(turning.selected.map((item) => [item, turnedItem(item, turning.center, done)]));
+    const turned = new Map(turning.selected.map((item) => [item, turnedItem(item, turning.center, this.worldTurn(done))]));
     this.setItems(turning.before.map((item) => turned.get(item) ?? item));
     this.select(turned.values());
   }
@@ -724,9 +779,33 @@ export class Editor {
     if (this.recorder) this.rope.rotated(middle, degrees); // the end of the stroke stays on the drawing
   }
 
-  /** Turns the view back to 0°, the shortest way. */
+  /** Turns the view back straight, its top at the top, the shortest way. Its mirror stays. */
   straightenView(): void {
-    this.turnView(-shortestAngle(this._camera.angle));
+    this.turnView(shortestAngle(uprightAngle(this._camera.mirror) - this._camera.angle));
+  }
+
+  /** The mirror key (`F`) was pressed or released: while it is held, the stroke being drawn is paused. */
+  setMirrorKeyHeld(held: boolean): void {
+    this.mirrorKeyHeld = held;
+  }
+
+  /** Mirrors the view around the middle of the screen: from left to right or from top to bottom, as seen. */
+  mirrorView(direction: "leftRight" | "topBottom"): void {
+    this.mirrorViewAcross(direction === "leftRight" ? 90 : 0);
+  }
+
+  /** Puts the view back the right way and straight: no mirror, 0°. */
+  uprightView(): void {
+    // `R(a) · M` on the screen: the mirror across the line at a/2 of the screen leaves `R(a − a)`, exactly
+    if (this._camera.mirror) this.mirrorViewAcross(this._camera.angle / 2);
+    else this.straightenView();
+  }
+
+  /** Mirrors the view across the line of the screen through its middle at `lineAngle` degrees (see `mirrorAt`). */
+  private mirrorViewAcross(lineAngle: number): void {
+    const middle = { x: this._viewport.width / 2, y: this._viewport.height / 2 };
+    this._camera = mirrorAt(this._camera, this._viewport, middle, lineAngle);
+    if (this.recorder) this.rope.mirrored(middle, lineAngle); // the end of the stroke stays on the drawing
   }
 
   /**

@@ -19,7 +19,8 @@ import {
   strokeToJSON,
   strokeWorldPoints,
 } from "./stroke";
-import { localToScreen, placedAlone, projectSection } from "./placement";
+import { localToScreen, placeSection, placedAlone, projectSection } from "./placement";
+import { applyTransform, createTransform } from "./transform";
 import { at, createRandom } from "./test-utils";
 
 const viewport: Viewport = { width: 1280, height: 720 };
@@ -391,6 +392,28 @@ describe("projectSection and localToScreen", () => {
         section.points.forEach((local, i) => {
           const approximate = localToScreen(projection, local);
           const exact = worldToScreen(camera, viewport, pointWorld(section, i));
+          expect(Math.abs(approximate.x - exact.x)).toBeLessThan(1e-6);
+          expect(Math.abs(approximate.y - exact.y)).toBeLessThan(1e-6);
+        });
+      }
+    }
+  });
+
+  it("places a transformed section like the exact route does, in a turned or mirrored view", () => {
+    const section = at(drawing.stroke.sections, 40);
+    const pivot = pointWorld(section, 0);
+    for (const t of [
+      createTransform({ origin: pivot, angle: 37, factor: 1.25 }),
+      createTransform({ origin: pivot, angle: 37, mirror: true, zLevel: -2 }),
+      createTransform({ origin: pivot, angle: 90, mirror: true }),
+    ]) {
+      for (const view of [{ angle: 0, mirror: true }, { angle: 30, mirror: true }, { angle: 30, mirror: false }, { angle: 270, mirror: true }]) {
+        const camera = createCamera({ center: applyTransform(t, pivot), zLevel: section.zLevel, factor: 1.3, ...view });
+        const projection = projectSection(placeSection(section, t), camera, viewport);
+        if (projection === null) throw new Error("the section should be projectable");
+        section.points.forEach((local, i) => {
+          const approximate = localToScreen(projection, local);
+          const exact = worldToScreen(camera, viewport, applyTransform(t, pointWorld(section, i)));
           expect(Math.abs(approximate.x - exact.x)).toBeLessThan(1e-6);
           expect(Math.abs(approximate.y - exact.y)).toBeLessThan(1e-6);
         });

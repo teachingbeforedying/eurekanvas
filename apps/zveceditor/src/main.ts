@@ -218,7 +218,7 @@ function updateHud(): void {
   const { camera } = editor;
   const stats = editor.stats;
   hud!.textContent = [
-    `zoom 2^${log2Scale(camera).toFixed(2)}   (level ${camera.zLevel}, factor ${camera.factor.toFixed(3)})   angle ${Number(camera.angle.toFixed(2))}°`,
+    `zoom 2^${log2Scale(camera).toFixed(2)}   (level ${camera.zLevel}, factor ${camera.factor.toFixed(3)})   angle ${Number(camera.angle.toFixed(2))}°${camera.mirror ? "   mirrored" : ""}`,
     `objects ${editor.items.length} · selected ${editor.selection.size} · strokes ${stats.strokes} · sections ${stats.sections} · points ${stats.points} · drawn sections ${renderer.drawnSections}`,
     describePen(editor.pen, editor.ropeNow),
     `automatic save in this browser: ${autosave}`,
@@ -230,7 +230,8 @@ function updateHud(): void {
     `zoom: wheel (also while drawing)    move the view: right or middle button, or Space + left button`,
     `turn the view: hold R and move the mouse around the middle (Shift: 15° steps)    R+Shift+H / R+Shift+G, or R+H / R+G with nothing selected: a quarter turn    R + release Space: straight`,
     `turn the selection: R + left button, around its middle (Shift: 15° steps)    R+H / R+G: a quarter turn    R + release Space: each object straight on the screen`,
-    `mirror the selection: F+H (left and right)    F+V (top and bottom)`,
+    `mirror the selection: F+H (left and right)    F+V (top and bottom)    F + release Space: each object the right way and straight`,
+    `mirror the view: F+Shift+H / F+Shift+V, or F+H / F+V with nothing selected    F + release Space: the right way and straight`,
     `undo: Ctrl+Z (while ² is held: the last stroke)    reset the view: 0    clear: K (Ctrl+Z brings it back)`,
     `save a file: Ctrl+S    open a file (adds to the drawing): Ctrl+O    show or hide this panel: H`,
   ].join("\n");
@@ -313,7 +314,7 @@ canvas.addEventListener(
 
 // Space and A are followed for Space + Ctrl+A (selects what touches the screen), pressed in any order. R is the
 // turning key: while it is held, the mouse turns the view, and H, G and Space do something else. F is the
-// mirror key: with H or V, it mirrors the selection.
+// mirror key: with H or V, it mirrors the selection, or the view; with Space, it puts them back the right way.
 let spaceDown = false;
 let aDown = false;
 let rDown = false;
@@ -363,10 +364,23 @@ window.addEventListener("keydown", (event) => {
       }
     }
   } else if (!ctrl && event.key.toLowerCase() === "f") {
-    fDown = true;
+    if (!event.repeat) {
+      fDown = true;
+      editor.setMirrorKeyHeld(true);
+    }
   } else if (fDown && (event.key.toLowerCase() === "h" || event.key.toLowerCase() === "v")) {
-    // a mirror of the selection, as seen on the screen: H from left to right, V from top to bottom
-    if (!event.repeat) edited(editor.mirrorSelection(event.key.toLowerCase() === "h" ? "leftRight" : "topBottom"));
+    // a mirror as seen on the screen, H from left to right, V from top to bottom: of the selection; of the view with
+    // Shift, or without a selection
+    if (!event.repeat) {
+      const direction = event.key.toLowerCase() === "h" ? "leftRight" : "topBottom";
+      if (event.shiftKey || editor.selection.size === 0) {
+        editor.mirrorView(direction);
+        showMessage(editor.camera.mirror ? "view mirrored (F + release Space: back the right way)" : "view no longer mirrored");
+        edited(1);
+      } else {
+        edited(editor.mirrorSelection(direction));
+      }
+    }
   } else if (event.code === "Space") {
     editor.setSpaceHeld(true);
     spaceDown = true;
@@ -440,12 +454,21 @@ window.addEventListener("keyup", (event) => {
     rDown = false;
     editor.setTurnKeyHeld(false);
   }
-  if (!event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "f") fDown = false;
+  if (!event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "f") {
+    fDown = false;
+    editor.setMirrorKeyHeld(false);
+  }
   if (event.code === "Space") {
     editor.setSpaceHeld(false);
     spaceDown = false;
-    // R + Space: each selected object looks straight on the screen; without a selection, the view turns back straight
-    if (rDown && editor.selection.size > 0) {
+    // F + Space: each selected object, or else the view, the right way and straight on the screen. R + Space: each
+    // selected object looks straight on the screen; without a selection, the view turns back straight
+    if (fDown && editor.selection.size > 0) {
+      edited(editor.uprightSelection());
+    } else if (fDown) {
+      editor.uprightView();
+      edited(1);
+    } else if (rDown && editor.selection.size > 0) {
       edited(editor.alignSelection());
     } else if (rDown) {
       editor.straightenView();
@@ -463,6 +486,7 @@ window.addEventListener("blur", () => {
   editor.setSpaceHeld(false);
   editor.setDrawKeyHeld(false);
   editor.setTurnKeyHeld(false);
+  editor.setMirrorKeyHeld(false);
   rDown = false;
   fDown = false;
   spaceDown = false;

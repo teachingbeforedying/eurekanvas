@@ -9,8 +9,10 @@
  *   any depth: a `number` cannot hold 2^1024.
  * - `center` is the world point shown at the middle of the viewport.
  * - `angle`, in degrees, is how far the drawing is turned clockwise on the screen. A world offset `d` from
- *   the center appears at `R(angle) · d · scale` from the middle of the screen, with
+ *   the center appears at `R(angle) · M · d · scale` from the middle of the screen, with
  *   `R(a) = [cos a, -sin a; sin a, cos a]` (clockwise, since the y axis points down).
+ * - `M` is the mirror of the view: `(x, y) → (x, −y)` when `mirror` is true, applied before the turn, as in an
+ *   object's transform. A view mirrored from left to right, its top still at the top, is `R(180) · M`.
  *
  * Only small offsets in pixels ever pass through a `number`: they are converted exactly to dyadics,
  * and added to (or subtracted from) the exact center. A turn applies to such small offsets only.
@@ -42,6 +44,8 @@ export interface Camera {
   readonly factor: number;
   /** In degrees, in [0, 360): how far the drawing is turned clockwise on the screen. */
   readonly angle: number;
+  /** Whether the drawing is seen in a mirror (see `M` above). */
+  readonly mirror: boolean;
 }
 
 export const ORIGIN: Point = Object.freeze({ x: ZERO, y: ZERO });
@@ -64,6 +68,14 @@ export function normalizeAngle(degrees: number): number {
 export function shortestAngle(degrees: number): number {
   const angle = normalizeAngle(degrees);
   return angle > 180 ? angle - 360 : angle;
+}
+
+/**
+ * The angle at which `R(angle) · M` looks straight on the screen, its top at the top: 0 without a mirror, 180 with
+ * one (`R(180) · M` only swaps left and right). For the view as for an object.
+ */
+export function uprightAngle(mirror: boolean): number {
+  return mirror ? 180 : 0;
 }
 
 /** The cosine and the sine of an angle in degrees, exact for quarter turns (they are then 0 or ±1). */
@@ -130,12 +142,13 @@ export interface CameraOptions {
   readonly factor?: number;
   /** In degrees, any finite angle: it is brought into [0, 360). */
   readonly angle?: number;
+  readonly mirror?: boolean;
 }
 
-/** A camera at the world origin, with a scale of 1 pixel per world unit, not turned. */
+/** A camera at the world origin, with a scale of 1 pixel per world unit, not turned, not mirrored. */
 export function createCamera(options: CameraOptions = {}): Camera {
   const { zLevel, factor } = normalizeZoom(options.zLevel ?? 0, options.factor ?? 1);
-  return { center: options.center ?? ORIGIN, zLevel, factor, angle: normalizeAngle(options.angle ?? 0) };
+  return { center: options.center ?? ORIGIN, zLevel, factor, angle: normalizeAngle(options.angle ?? 0), mirror: options.mirror ?? false };
 }
 
 /** Pixels per world unit, as a `number`. For display only: it is `Infinity` or `0` beyond 2^±1023. */
@@ -150,11 +163,12 @@ export function log2Scale(camera: Camera): number {
 
 /**
  * The world offset corresponding to an offset of `(dx, dy)` pixels on the screen. Exact once the turned-back
- * pixels are computed; always computed the same way, so that zooming and turning can rely on it.
+ * pixels are computed; always computed the same way, so that zooming, turning and mirroring can rely on it.
  */
 function worldOffset(camera: Camera, dx: number, dy: number): Point {
   const back = unturned(turnOf(camera.angle), dx / camera.factor, dy / camera.factor);
-  return { x: shift(fromNumber(back.x), -camera.zLevel), y: shift(fromNumber(back.y), -camera.zLevel) };
+  const y = camera.mirror ? -back.y : back.y;
+  return { x: shift(fromNumber(back.x), -camera.zLevel), y: shift(fromNumber(y), -camera.zLevel) };
 }
 
 export function screenToWorld(camera: Camera, viewport: Viewport, p: ScreenPoint): Point {
@@ -173,7 +187,7 @@ export function worldToScreen(camera: Camera, viewport: Viewport, point: Point):
   assertViewport(viewport);
   const dx = toNumber(shift(sub(point.x, camera.center.x), camera.zLevel)) * camera.factor;
   const dy = toNumber(shift(sub(point.y, camera.center.y), camera.zLevel)) * camera.factor;
-  const offset = turned(turnOf(camera.angle), dx, dy);
+  const offset = turned(turnOf(camera.angle), dx, camera.mirror ? -dy : dy);
   return { x: offset.x + viewport.width / 2, y: offset.y + viewport.height / 2 };
 }
 
@@ -212,6 +226,19 @@ export function rotateAt(camera: Camera, viewport: Viewport, anchor: ScreenPoint
   assertViewport(viewport);
   assertScreenPoint(anchor);
   return keepingAnchor(camera, { ...camera, angle: normalizeAngle(camera.angle + degrees) }, viewport, anchor);
+}
+
+/**
+ * Mirrors the view across the line of the screen through `anchor` that makes `lineAngle` degrees with the screen's
+ * x axis (clockwise): 90 swaps left and right, 0 top and bottom. The world point under `anchor` stays exactly
+ * where it is, for the same reason as `zoomAt`. A mirror across a line at angle φ is `R(2φ) · M`, and
+ * `R(2φ) · M · R(a) · M_view = R(2φ − a) · M · M_view`. Twice the same mirror gives back the same camera.
+ */
+export function mirrorAt(camera: Camera, viewport: Viewport, anchor: ScreenPoint, lineAngle: number): Camera {
+  assertViewport(viewport);
+  assertScreenPoint(anchor);
+  const next = { ...camera, angle: normalizeAngle(2 * lineAngle - camera.angle), mirror: !camera.mirror };
+  return keepingAnchor(camera, next, viewport, anchor);
 }
 
 /** `next`, with its center moved so that the world point under `anchor` with `camera` is under it again. */

@@ -238,3 +238,17 @@ describe("Rope.rotated", () => {
     expect(rope.position).toEqual({ x: 0, y: 100 });
   });
 });
+
+describe("Rope.mirrored", () => {
+  it("keeps the brush on the drawing when the view is mirrored", () => {
+    const rope = new Rope(10);
+    rope.start({ x: 100, y: 30 });
+    rope.mirrored({ x: 640, y: 360 }, 90); // from left to right
+    expect(rope.position).toEqual({ x: 1180, y: 30 });
+    rope.mirrored({ x: 640, y: 360 }, 0); // from top to bottom
+    expect(rope.position).toEqual({ x: 1180, y: 690 });
+    rope.mirrored({ x: 0, y: 0 }, 45); // across the diagonal: x and y swap
+    expect(rope.position.x).toBeCloseTo(690, 9);
+    expect(rope.position.y).toBeCloseTo(1180, 9);
+  });
+});

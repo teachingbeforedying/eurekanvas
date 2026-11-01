@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ORIGIN, type Point, type Viewport, createCamera } from "./camera";
-import type { Item } from "./drawing";
+import { ORIGIN, type Point, type Viewport, createCamera, screenToWorld } from "./camera";
+import { type Item, withTransform } from "./drawing";
 import { type Dyadic, add, fromNumber, shift } from "./dyadic";
 import {
   boundsFromCorners,
@@ -10,9 +10,13 @@ import {
   itemsInRectangle,
   orientedRectangle,
   rectangleOnScreen,
+  screenRectangle,
   worldRectangle,
 } from "./hit";
+import { placedSections } from "./placement";
+import { selectDrawableSections } from "./render";
 import { type Stroke, StrokeRecorder } from "./stroke";
+import { createTransform } from "./transform";
 
 // With the default camera (level 0, centre at the world origin), world point (x, y) is at screen (640 + x, 360 + y).
 const viewport: Viewport = { width: 1280, height: 720 };
@@ -102,6 +106,38 @@ describe("itemsAt", () => {
     const along = { x: 640 + 50 * Math.cos(Math.PI / 6), y: 360 + 50 * Math.sin(Math.PI / 6) };
     expect(itemsAt([line], thirty, viewport, along)).toEqual([0]);
     expect(itemsAt([line], thirty, viewport, { x: along.x + 3, y: along.y - 5 }, 4)).toEqual([]);
+  });
+
+  it("finds the ink where a mirrored view shows it, mirrored and turned objects included", () => {
+    const leftRight = createCamera({ angle: 180, mirror: true });
+    const line = stroke([[0, 0], [100, 0]], 0, 2);
+    expect(itemsAt([line], leftRight, viewport, { x: 590, y: 360 })).toEqual([0]);
+    expect(itemsAt([line], leftRight, viewport, { x: 690, y: 360 }, 4)).toEqual([]);
+    // a quarter turn of a mirrored view sends a vertical line to the right, not to the left
+    const down = stroke([[0, 0], [0, 100]], 0, 2);
+    const mirroredQuarter = createCamera({ angle: 90, mirror: true });
+    expect(itemsAt([down], mirroredQuarter, viewport, { x: 690, y: 360 })).toEqual([0]);
+    expect(itemsAt([down], mirroredQuarter, viewport, { x: 590, y: 360 }, 4)).toEqual([]);
+    // two mirrors: a line going down, mirrored by its object, goes down again in a view mirrored from top to bottom
+    const up = withTransform(stroke([[0, 0], [0, 50]], 0, 2), createTransform({ origin: pt(0, 0), mirror: true }));
+    const topBottom = createCamera({ mirror: true });
+    expect(itemsAt([up], topBottom, viewport, { x: 640, y: 385 })).toEqual([0]);
+    expect(itemsAt([up], topBottom, viewport, { x: 640, y: 335 }, 4)).toEqual([]);
+    // a turned object in a mirrored, turned view: R(30) · M · R(90) = R(-60) · M
+    const turned = withTransform(line, createTransform({ origin: pt(0, 0), angle: 90 }));
+    const thirty = createCamera({ angle: 30, mirror: true });
+    const along = { x: 640 + 50 * Math.cos(-Math.PI / 3), y: 360 + 50 * Math.sin(-Math.PI / 3) };
+    expect(itemsAt([turned], thirty, viewport, along)).toEqual([0]);
+    const wrongWay = { x: 640 + 50 * Math.cos((2 * Math.PI) / 3), y: 360 + 50 * Math.sin((2 * Math.PI) / 3) }; // R(30 + 90) · M
+    expect(itemsAt([turned], thirty, viewport, wrongWay, 4)).toEqual([]);
+  });
+
+  it("draws what a mirrored view brings onto the screen, and only that", () => {
+    // R(30) · (300, 300) is below the screen; R(30) · M · (300, 300) is on it, to the right
+    const short = stroke([[300, 300], [305, 300]]);
+    const thirty = createCamera({ angle: 30 });
+    expect(selectDrawableSections(placedSections(short), thirty, viewport)).toEqual([]);
+    expect(selectDrawableSections(placedSections(short), { ...thirty, mirror: true }, viewport)).toHaveLength(1);
   });
 
   it("does not take what is not drawn: a section too small to see cannot be hit", () => {
@@ -202,6 +238,21 @@ describe("itemsInRectangle", () => {
     expect(orientedRectangle(pt(0, 0), pt(-10, 10), ORIGIN, 90).bounds).toEqual(rect(-10, -10, 0, 0));
     expect(orientedRectangle(pt(3, 4), pt(5, 1), pt(1, 1), 0).bounds).toEqual(rect(2, 0, 4, 3));
   });
+
+  it("follows the sides of the screen in a mirrored, turned view", () => {
+    const mirrored = createCamera({ angle: 30, mirror: true });
+    const world = (x: number, y: number) => screenToWorld(mirrored, viewport, { x, y });
+    const lineOnScreen = (y: number): Stroke => {
+      const recorder = new StrokeRecorder();
+      for (const x of [520, 760]) recorder.addPoint(world(x, y), 0);
+      return recorder.stroke;
+    };
+    // a long, thin rectangle on the screen, from (500, 340) to (780, 380)
+    const band = screenRectangle(mirrored, world(500, 340), world(780, 380));
+    expect(itemsInRectangle([lineOnScreen(360), lineOnScreen(390)], band, "inside")).toEqual([0]);
+    expect(itemsInRectangle([lineOnScreen(360), lineOnScreen(390)], band, "touching")).toEqual([0]);
+    expect(screenRectangle(createCamera({ angle: 30 }), pt(0, 0), pt(1, 1)).angle).toBe(30);
+  });
 });
 
 describe("itemBounds", () => {
@@ -222,5 +273,9 @@ describe("itemBounds", () => {
     expect(rectangleOnScreen(camera, viewport, area(0, 0, 10, 20))).toEqual({ center: { x: 645, y: 370 }, width: 10, height: 20, angle: 0 });
     const zoomed = createCamera({ center: pt(5, 10), zLevel: 1, angle: 90 });
     expect(rectangleOnScreen(zoomed, viewport, area(0, 0, 10, 20))).toEqual({ center: { x: 640, y: 360 }, width: 20, height: 40, angle: 90 });
+    // the sides of a rectangle turned by -30° in the world, in a view turned by 90° and mirrored: R(90) · M · R(-30) = R(120) · M
+    const mirrored = createCamera({ angle: 90, mirror: true });
+    const frame = { origin: ORIGIN, angle: 30, bounds: rect(0, 0, 10, 20) };
+    expect(rectangleOnScreen(mirrored, viewport, frame)).toMatchObject({ width: 10, height: 20, angle: 120 });
   });
 });
