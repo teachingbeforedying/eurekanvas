@@ -211,7 +211,7 @@ function invalidate(): void {
 let pointer: ScreenPoint | null = null;
 function updateCursor(): void {
   const over = buttonsDown === 0 && pointer !== null && editor.pointsAtObject(pointer);
-  canvas!.style.cursor = over ? "pointer" : "";
+  canvas!.style.cursor = editor.isCarrying ? "grabbing" : over ? "pointer" : "";
 }
 
 function updateHud(): void {
@@ -225,6 +225,8 @@ function updateHud(): void {
     ``,
     `draw: hold ² (the key left of 1), then the left button; the strokes drawn while ² stays held make one object`,
     `select: left button (Shift: add or remove, Alt: the object below)    deselect: Escape or a click on empty space`,
+    `move: drag an object, or the arrows (Shift: 10 pixels; nothing selected: the view)    Escape while dragging: everything back    the wheel while holding carries it in depth (Shift: by powers of 2)`,
+    `change the scale of the selection: hold 1 and turn the wheel (Shift: by 2)`,
     `rectangle: drag from empty space; left to right takes what is inside, right to left what it touches`,
     `select all: Ctrl+A    what touches the screen: Space + Ctrl+A    delete: Delete    group: Shift+G    ungroup: Shift+B`,
     `zoom: wheel (also while drawing)    move the view: right or middle button, or Space + left button`,
@@ -305,7 +307,9 @@ canvas.addEventListener(
     event.preventDefault();
     // a notch is about 100 pixels; Firefox may report lines (about 3 per notch) or pages
     const unit = event.deltaMode === 1 ? 100 / 3 : event.deltaMode === 2 ? 800 : 1;
-    editor.wheel(position(event), event.deltaY * unit);
+    // with Shift, browsers may turn the wheel into a sideways scroll
+    const delta = event.shiftKey && event.deltaY === 0 ? event.deltaX : event.deltaY;
+    editor.wheel(position(event), delta * unit, { shift: event.shiftKey });
     changed();
     invalidate();
   },
@@ -347,6 +351,20 @@ window.addEventListener("keydown", (event) => {
     invalidate();
   } else if (event.key === "Alt") {
     event.preventDefault(); // Alt+click takes the object below: Alt must not open the menu bar (Firefox) or focus the browser menu
+  } else if (!ctrl && event.code === "Digit1") {
+    // the scale key, read by its place: 1 needs Shift on a French keyboard
+    if (!event.repeat) editor.setCraneKeyHeld(true);
+  } else if (plain && event.key.startsWith("Arrow")) {
+    event.preventDefault(); // instead of scrolling the page
+    const step = event.shiftKey ? 10 : 1;
+    const dx = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
+    const dy = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
+    if (editor.selection.size > 0) {
+      edited(editor.moveSelection(dx, dy));
+    } else {
+      editor.moveCamera(dx, dy);
+      edited(1);
+    }
   } else if (!ctrl && event.key.toLowerCase() === "r") {
     if (!event.repeat) {
       rDown = true;
@@ -450,6 +468,7 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keyup", (event) => {
   if (event.key.toLowerCase() === "a") aDown = false;
   if (event.key === "Alt") event.preventDefault(); // Firefox opens its menu bar when Alt is released
+  if (event.code === "Digit1") editor.setCraneKeyHeld(false);
   if (!event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "r") {
     rDown = false;
     editor.setTurnKeyHeld(false);
@@ -487,6 +506,7 @@ window.addEventListener("blur", () => {
   editor.setDrawKeyHeld(false);
   editor.setTurnKeyHeld(false);
   editor.setMirrorKeyHeld(false);
+  editor.setCraneKeyHeld(false);
   rDown = false;
   fDown = false;
   spaceDown = false;

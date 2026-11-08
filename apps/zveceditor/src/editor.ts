@@ -19,19 +19,24 @@ import {
   composeTransforms,
   createCamera,
   createTransform,
+  followingView,
   isGroup,
   itemBounds,
   itemFrame,
   itemStrokes,
   itemsAt,
   itemsInRectangle,
+  log2Scale,
   mirrorAt,
   mirroredAcross,
+  movedBy,
+  normalizeZoom,
   pan,
   placedAlone,
   placedSections,
   rectangleCenter,
   rotateAt,
+  scaledAround,
   screenRectangle,
   screenToWorld,
   selectDrawableSections,
@@ -41,6 +46,7 @@ import {
   turnedAround,
   uprightAngle,
   withTransform,
+  worldOffset,
   worldToScreen,
   zoomAt,
 } from "@eurekanvas/engine";
@@ -120,15 +126,44 @@ export interface SelectionReport {
 
 /**
  * The primary button is down without the drawing key. `start` is the world point that was under the pointer,
- * so that a rectangle stays on the drawing when the view moves or zooms meanwhile. Pressed on an object, it is
- * a click; elsewhere, it becomes a rectangle once the pointer has gone far enough (`dragging`).
+ * so that a rectangle stays on the drawing when the view moves or zooms meanwhile. Pressed on an object, the
+ * selection is settled at once, and `target` and `onClick` say what a release without a move still does;
+ * elsewhere, it becomes a rectangle once the pointer has gone far enough (`dragging`).
  */
 interface Press {
   readonly start: Point;
   readonly shift: boolean;
-  readonly alt: boolean;
-  readonly onObject: boolean;
+  /** The object pressed on, if any. */
+  readonly target: Item | undefined;
+  readonly onClick: "nothing" | "keepOnlyTarget" | "removeTarget";
   dragging: boolean;
+}
+
+/**
+ * The selection is held by the primary button, from the press on: the objects follow the pointer and stay as they
+ * look on the screen whatever the view does. Everything is computed again from the state at the press, so that
+ * nothing adds up.
+ */
+interface Grab {
+  readonly before: readonly Item[];
+  readonly selected: readonly Item[];
+  readonly camera: Camera;
+  readonly from: ScreenPoint;
+  /** The pointer the objects follow: it stays where it was while the turning key is held. */
+  pointer: ScreenPoint;
+  /** Something moved: releasing the button is an action, not a click. */
+  active: boolean;
+  /** How much larger the objects are on the screen than at the press, around the pointer (with Shift + wheel). */
+  sizeOnScreen: number;
+  /** After Shift + wheel: how many levels of zoom the objects' scale made up for, exactly. */
+  levels: number | null;
+}
+
+/** A run of small changes that make one action, for as long as nothing else happens. */
+interface Run {
+  readonly kind: "arrows" | "crane";
+  readonly selection: ReadonlySet<Item>;
+  readonly items: readonly Item[];
 }
 
 /** The zoom factor for a wheel movement: `deltaY > 0` zooms out, `deltaY < 0` zooms in. */
@@ -182,7 +217,9 @@ export interface EditorStats {
  *   top-level object, even when a stroke of a group is clicked) or deselects on empty space; with Shift it adds
  *   or removes that object; with Alt it takes the object below the selected one there, and so on down, then
  *   from the top again. Dragged from empty space, it draws a rectangle: from left to right it takes the
- *   objects entirely inside it, from right to left those it touches, at every depth;
+ *   objects entirely inside it, from right to left those it touches, at every depth. Pressed on an object, it
+ *   holds the selection: dragging moves it, and the wheel carries it in depth (it stays as it looks on the screen
+ *   while the view zooms, moves or turns);
  * - middle or secondary button: move the view. It can be pressed while the primary button is down: the
  *   stroke is paused, the view follows the pointer, and drawing goes on from the same place of the
  *   stroke when the button is released;
@@ -232,6 +269,10 @@ export class Editor {
   /** Where the pointer was at the last event. */
   private last: ScreenPoint = { x: 0, y: 0 };
   private press: Press | null = null;
+  private grab: Grab | null = null;
+  private run: Run | null = null;
+  /** The scale key (`1`) is held: the wheel changes the scale of the selection. */
+  private craneKeyHeld = false;
   /**
    * While the turning key is held: the angle of the view when it was pressed (or after the last quarter turn),
    * and the angle the pointer has swept since, before any rounding to steps.
@@ -332,6 +373,11 @@ export class Editor {
     return this.recorder !== null;
   }
 
+  /** A stroke, or a gesture on the selection, is under way: the objects must not change meanwhile. */
+  private get isBusy(): boolean {
+    return this.isDrawing || this.grab !== null || this.turningSelection !== null;
+  }
+
   /** The view follows the pointer. */
   get isMovingView(): boolean {
     return this.panButtons > 0 || this.spacePanning;
@@ -368,13 +414,7 @@ export class Editor {
           return;
         }
         // the drawing key must be held before the press to draw: without it, the button selects
-        this.press = {
-          start: screenToWorld(this._camera, this._viewport, p),
-          shift: modifiers.shift === true,
-          alt: modifiers.alt === true,
-          onObject: this.objectsAt(p).length > 0,
-          dragging: false,
-        };
+        this.pressAt(p, modifiers.shift === true, modifiers.alt === true);
         return;
       }
       this.recorder = new StrokeRecorder();
@@ -402,11 +442,17 @@ export class Editor {
     } else if (this.recorder) {
       const brush = this.rope.move(p, time);
       if (brush) this.recorder.addScreenPoint(this._camera, this._viewport, brush, STROKE_WIDTH_PIXELS);
-    } else if (this.press && !this.press.onObject && !this.press.dragging) {
+    } else if (this.press && this.press.target === undefined && !this.press.dragging) {
       const start = worldToScreen(this._camera, this._viewport, this.press.start);
       if (Math.hypot(p.x - start.x, p.y - start.y) > DRAG_THRESHOLD_PIXELS) this.press.dragging = true;
     }
     this.last = p;
+    const grab = this.grab;
+    if (grab && !this.turning) {
+      grab.pointer = p;
+      grab.active ||= this.isMovingView || Math.hypot(p.x - grab.from.x, p.y - grab.from.y) > DRAG_THRESHOLD_PIXELS;
+      if (grab.active) this.carry();
+    }
   }
 
   /**
@@ -437,11 +483,90 @@ export class Editor {
       return null;
     }
     const press = this.press;
+    const grab = this.grab;
     this.press = null;
+    this.grab = null;
+    if (grab?.active) {
+      this.history.push(grab.before); // the whole gesture is one action
+      return null;
+    }
     if (press === null) return null;
     if (press.dragging) return this.selectInRectangle(press);
     this.click(press);
     return null;
+  }
+
+  /** The objects held by the primary button are being carried. */
+  get isCarrying(): boolean {
+    return this.grab?.active === true;
+  }
+
+  /**
+   * The primary button was pressed at `p`, to select. On an object, the selection is settled at once and held, so
+   * that a drag or the wheel can carry it; what is left for a release without a move is in `Press.onClick`.
+   */
+  private pressAt(p: ScreenPoint, shift: boolean, alt: boolean): void {
+    const hits = this.objectsAt(p);
+    let target: Item | undefined = hits[0];
+    if (alt && hits.length > 1) {
+      // below the deepest selected object here (the topmost one if none is), and from the top again after the bottom
+      let current = 0;
+      hits.forEach((item, index) => {
+        if (this._selection.has(item)) current = index;
+      });
+      target = hits[(current + 1) % hits.length];
+    }
+    let onClick: Press["onClick"] = "nothing";
+    if (target !== undefined) {
+      if (shift) {
+        if (this._selection.has(target)) onClick = "removeTarget";
+        else this.select([...this._selection, target]);
+      } else if (alt || !this._selection.has(target)) {
+        this.select([target]);
+      } else {
+        onClick = "keepOnlyTarget";
+      }
+      this.grab = {
+        before: this.finished,
+        selected: [...this._selection],
+        camera: this._camera,
+        from: p,
+        pointer: p,
+        active: false,
+        sizeOnScreen: 1,
+        levels: null,
+      };
+    }
+    this.press = { start: screenToWorld(this._camera, this._viewport, p), shift, target, onClick, dragging: false };
+  }
+
+  /** Puts the held objects where they must be now, from where they were at the press. */
+  private carry(): void {
+    const grab = this.grab;
+    if (grab === null) return;
+    const from = grab.camera;
+    const to = this._camera;
+    const middle = { x: this._viewport.width / 2, y: this._viewport.height / 2 };
+    // the pointer, plus what was at the press around it, at the size it now has on the screen
+    const shift = {
+      x: grab.pointer.x - middle.x + grab.sizeOnScreen * (middle.x - grab.from.x),
+      y: grab.pointer.y - middle.y + grab.sizeOnScreen * (middle.y - grab.from.y),
+    };
+    const zoom =
+      grab.levels !== null
+        ? { zLevel: -grab.levels, factor: 1 }
+        : { zLevel: from.zLevel - to.zLevel, factor: (grab.sizeOnScreen * from.factor) / to.factor };
+    const carrying = followingView(from, to, shift, zoom);
+    const carried = new Map(grab.selected.map((item) => [item, withTransform(item, composeTransforms(carrying, transformOf(item)))]));
+    this.setItems(grab.before.map((item) => carried.get(item) ?? item));
+    this.select(carried.values());
+  }
+
+  /** The view changed: what is held stays as it looks on the screen. */
+  private viewChanged(): void {
+    if (this.grab === null) return;
+    this.grab.active = true;
+    this.carry();
   }
 
   /** The objects at `p` on the screen, topmost first. */
@@ -455,25 +580,15 @@ export class Editor {
     return !this.drawKeyHeld && !this.isDrawing && this.objectsAt(p).length > 0;
   }
 
+  /** The button was released without a move. */
   private click(press: Press): void {
-    const hits = this.objectsAt(worldToScreen(this._camera, this._viewport, press.start));
-    let target: Item | undefined = hits[0];
-    if (press.alt && hits.length > 1) {
-      // below the deepest selected object here (the topmost one if none is), and from the top again after the bottom
-      let current = 0;
-      hits.forEach((item, index) => {
-        if (this._selection.has(item)) current = index;
-      });
-      target = hits[(current + 1) % hits.length];
-    }
+    const { target, onClick } = press;
     if (target === undefined) {
       if (!press.shift) this.select([]);
-    } else if (!press.shift) {
+    } else if (onClick === "keepOnlyTarget") {
       this.select([target]);
-    } else if (this._selection.has(target)) {
+    } else if (onClick === "removeTarget") {
       this.select([...this._selection].filter((item) => item !== target));
-    } else {
-      this.select([...this._selection, target]);
     }
   }
 
@@ -493,7 +608,7 @@ export class Editor {
    * one by one, leave the selection when they become their object.
    */
   selectAll(): SelectionReport {
-    this.select(this.finished);
+    if (this.grab === null) this.select(this.finished);
     return this.report();
   }
 
@@ -502,6 +617,7 @@ export class Editor {
    * too small to be seen are taken too.
    */
   selectOnScreen(): SelectionReport {
+    if (this.grab !== null) return this.report();
     const corner = { x: this._viewport.width, y: this._viewport.height };
     const screen = screenRectangle(
       this._camera,
@@ -513,10 +629,22 @@ export class Editor {
   }
 
   /**
-   * Escape: puts the selection back as it was if the pointer is turning it; drops the rectangle being dragged, if
+   * Escape: puts everything back as it was at the press, the view too, if the selection is held (and forgets the
+   * press); puts the selection back as it was if the pointer is turning it; drops the rectangle being dragged, if
    * any; otherwise deselects everything.
    */
   cancel(): void {
+    const grab = this.grab;
+    if (grab) {
+      this.grab = null;
+      this.press = null;
+      if (grab.active) {
+        this.setItems(grab.before);
+        this.select(grab.selected);
+        this._camera = grab.camera;
+      }
+      return;
+    }
     const turning = this.turningSelection;
     if (turning) {
       this.turningSelection = null;
@@ -536,7 +664,7 @@ export class Editor {
    * while drawing.
    */
   deleteSelection(): number {
-    if (this.isDrawing) return 0;
+    if (this.isBusy) return 0;
     this.interruptHold();
     const selected = this._selection;
     if (selected.size === 0) return 0;
@@ -550,7 +678,7 @@ export class Editor {
    * fewer than two selected or while drawing.
    */
   groupSelection(): number {
-    if (this.isDrawing) return 0;
+    if (this.isBusy) return 0;
     this.interruptHold();
     const selected = this._selection;
     if (selected.size < 2) return 0;
@@ -570,7 +698,7 @@ export class Editor {
    * while drawing.
    */
   ungroupSelection(): number {
-    if (this.isDrawing) return 0;
+    if (this.isBusy) return 0;
     this.interruptHold();
     const selected = this._selection;
     const opened = new Map<Item, readonly Item[]>();
@@ -672,7 +800,7 @@ export class Editor {
 
   /** The exact center of the frame of the selection, after ending a hold of the drawing key; `null` when nothing can be changed. */
   private selectionCenter(): Point | null {
-    if (this.isDrawing || this.turningSelection) return null;
+    if (this.isBusy) return null;
     this.interruptHold();
     const frame = this.shapeOfSelection().frame;
     return frame === null ? null : rectangleCenter(frame);
@@ -684,6 +812,57 @@ export class Editor {
     this.commit(this.finished.map((item) => changed.get(item) ?? item));
     this.select(changed.values());
     return changed.size;
+  }
+
+  /**
+   * Replaces each selected object by `change(object)`, as a part of one action with the changes of the same kind
+   * made just before, if nothing else happened since. Returns how many objects.
+   */
+  private changeSelectedInRun(kind: Run["kind"], change: (item: Item) => Item): number {
+    const run = this.run;
+    const goesOn = run !== null && run.kind === kind && run.selection === this._selection && run.items === this.finished;
+    const changed = new Map([...this._selection].map((item) => [item, change(item)]));
+    const items = this.finished.map((item) => changed.get(item) ?? item);
+    if (goesOn) this.setItems(items);
+    else this.commit(items);
+    this.select(changed.values());
+    this.run = { kind, selection: this._selection, items: this.finished };
+    return changed.size;
+  }
+
+  /**
+   * Moves the selection by `(dx, dy)` pixels of the screen. A run of moves is one action. Returns how many objects
+   * moved; 0, doing nothing, with nothing selected or while drawing.
+   */
+  moveSelection(dx: number, dy: number): number {
+    if (this.selectionCenter() === null) return 0;
+    const offset = worldOffset(this._camera, dx, dy);
+    return this.changeSelectedInRun("arrows", (item) => withTransform(item, movedBy(transformOf(item), offset)));
+  }
+
+  /** The camera moves by `(dx, dy)` pixels of the screen: the drawing goes the other way. */
+  moveCamera(dx: number, dy: number): void {
+    this._camera = pan(this._camera, -dx, -dy);
+    if (this.recorder) this.rope.shifted(-dx, -dy); // the end of the stroke stays on the drawing
+    this.viewChanged();
+  }
+
+  /**
+   * Changes the scale of the selection around the center of its frame, as one block, the view staying where it is:
+   * by a wheel step, or by exactly 2 with `powersOfTwo`. A run of steps while the key stays held is one action.
+   */
+  private craneSelection(deltaY: number, powersOfTwo: boolean): void {
+    if (deltaY === 0) return;
+    const center = this.selectionCenter();
+    if (center === null) return;
+    const { zLevel, factor } = powersOfTwo ? { zLevel: deltaY < 0 ? 1 : -1, factor: 1 } : normalizeZoom(0, wheelZoomFactor(deltaY));
+    this.changeSelectedInRun("crane", (item) => withTransform(item, scaledAround(transformOf(item), center, zLevel, factor)));
+  }
+
+  /** The scale key (`1`) was pressed or released: while it is held, the wheel changes the scale of the selection. */
+  setCraneKeyHeld(held: boolean): void {
+    this.craneKeyHeld = held;
+    if (!held && this.run?.kind === "crane") this.run = null;
   }
 
   /** The primary button was pressed with the turning key: the pointer will turn the selection around the center of its frame. */
@@ -753,11 +932,29 @@ export class Editor {
     if (this.drawKeyHeld) this.hold = { count: 0 };
   }
 
-  /** Zooms around `p`, whatever the mode. */
-  wheel(p: ScreenPoint, deltaY: number): void {
+  /**
+   * The wheel. With the scale key held, it changes the scale of the selection, and nothing else. Otherwise it zooms
+   * around `p`, and what is held stays as it looks on the screen; with Shift, the scale of what is held stays a whole
+   * power of 2 away from what it was at the press: the closest to the zoom made.
+   */
+  wheel(p: ScreenPoint, deltaY: number, modifiers: Modifiers = {}): void {
+    if (this.craneKeyHeld && !this.isDrawing) {
+      this.craneSelection(deltaY, modifiers.shift === true);
+      return;
+    }
     const ratio = wheelZoomFactor(deltaY);
     this._camera = zoomAt(this._camera, this._viewport, p, ratio);
     if (this.recorder) this.rope.zoomed(p, ratio); // the end of the stroke stays on the drawing
+    const grab = this.grab;
+    if (grab === null) return;
+    grab.levels = null;
+    if (modifiers.shift) {
+      const { zLevel, factor } = this._camera;
+      const levels = Math.round(log2Scale(this._camera) - log2Scale(grab.camera));
+      grab.levels = levels;
+      grab.sizeOnScreen = 2 ** (zLevel - grab.camera.zLevel - levels) * (factor / grab.camera.factor);
+    }
+    this.viewChanged();
   }
 
   /** The turning key (`R`) was pressed or released: while it is held, the pointer turns the view. */
@@ -777,6 +974,7 @@ export class Editor {
     if (degrees === 0) return;
     this._camera = rotateAt(this._camera, this._viewport, middle, degrees);
     if (this.recorder) this.rope.rotated(middle, degrees); // the end of the stroke stays on the drawing
+    this.viewChanged();
   }
 
   /** Turns the view back straight, its top at the top, the shortest way. Its mirror stays. */
@@ -806,6 +1004,7 @@ export class Editor {
     const middle = { x: this._viewport.width / 2, y: this._viewport.height / 2 };
     this._camera = mirrorAt(this._camera, this._viewport, middle, lineAngle);
     if (this.recorder) this.rope.mirrored(middle, lineAngle); // the end of the stroke stays on the drawing
+    this.viewChanged();
   }
 
   /**
@@ -862,7 +1061,7 @@ export class Editor {
    * (and leaves the view). Returns `false`, doing nothing, while a stroke is being drawn.
    */
   addDrawing(drawing: Drawing): boolean {
-    if (this.isDrawing) return false;
+    if (this.isBusy) return false;
     this.interruptHold();
     if (drawing.items.length > 0) this.commit([...this.finished, ...drawing.items]);
     this._camera = drawing.view;
@@ -871,7 +1070,7 @@ export class Editor {
 
   /** Removes every object; `undo` brings them all back. Returns `false`, doing nothing, while a stroke is being drawn. */
   clear(): boolean {
-    if (this.isDrawing) return false;
+    if (this.isBusy) return false;
     this.interruptHold();
     if (this.finished.length > 0) this.commit([]);
     return true;
@@ -883,7 +1082,7 @@ export class Editor {
    * view stays where it is, and the selection keeps only the objects still there. Does nothing while drawing.
    */
   undo(): void {
-    if (this.isDrawing) return;
+    if (this.isBusy) return;
     const previous = this.history.pop();
     if (previous === undefined) return;
     this.setItems(previous);
@@ -907,5 +1106,6 @@ export class Editor {
   /** Goes back to the starting view: the world origin at the middle of the screen, at the starting zoom. */
   resetView(): void {
     this._camera = createCamera();
+    this.viewChanged();
   }
 }

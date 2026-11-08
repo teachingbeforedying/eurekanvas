@@ -55,8 +55,11 @@ export {
   applyTransform,
   composeTransforms,
   createTransform,
+  followingView,
   isIdentity,
   mirroredAcross,
+  movedBy,
+  scaledAround,
   turnedAround,
 } from "./transform";
 export {
@@ -122,6 +125,7 @@ export {
   turned,
   unturned,
   uprightAngle,
+  worldOffset,
   worldToScreen,
   zoomAt,
 } from "./camera";

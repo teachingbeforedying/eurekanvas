@@ -333,6 +333,19 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
   - **zoomScroll** : la molette emporte ce qu'on tient, qui garde sa place et sa taille à l'écran et reste sous le pointeur, même quand la vue se déplace.
   - **craneScroll** : `1` + molette ; la vue reste fixe et la sélection change d'échelle autour de son centre.
   - Avec Maj, ces deux gestes avancent par puissances de 2.
+- **Déplacer et tenir, précisé le 2026-11-08** :
+  - Un appui sur un objet hors de la sélection le prend seul. Sur un objet de la sélection, glisser déplace toute la sélection, et un clic sans bouger ne garde que cet objet.
+  - Maj + appui sur un objet non sélectionné l'ajoute dès l'appui, et glisser déplace tout. Maj + clic sans bouger sur un objet sélectionné le retire.
+  - Alt + appui prend l'objet du dessous dès l'appui, et glisser le déplace seul.
+  - Le déplacement commence au-delà de 4 px ; l'objet rattrape alors le pointeur et le suit exactement.
+  - On attrape l'encre seulement : l'intérieur du cadre pointillé ne compte pas.
+  - `Échap` pendant un glisser remet aussi la vue comme à l'appui. C'est la seule fois où annuler touche la vue : `Ctrl+Z` ne la touche jamais.
+  - Tenu, un objet reste à sa place à l'écran quand `R` tourne la vue. La souris tourne la vue tant que `R` est tenu ; au relâchement, l'objet reprend sous le pointeur.
+- **Flèches, précisé le 2026-11-08** : une suite de flèches est une seule action, jusqu'à la prochaine autre action ou le prochain clic. Sans sélection, la caméra suit la flèche : flèche droite, on regarde plus à droite, donc le dessin part à gauche (1 px, 10 avec Maj).
+- **En profondeur, précisé le 2026-11-08** :
+  - Maj + molette en tenant, comme l'ancienne version (L33841) : la vue zoome normalement, et l'échelle de l'objet reste celle de l'appui multipliée par une puissance de 2 exacte, la plus proche du zoom fait. Entre deux sauts, il grossit ou rétrécit avec la vue, jusqu'à un facteur √2 de chaque côté, et ce qu'on tient reste sous le pointeur.
+  - `1` + Maj + molette : un cran multiplie ou divise la sélection exactement par 2 autour de son centre. Sans Maj, ×1,2 ou ×0,8 par cran, comme le zoom. Une suite de crans, tant que `1` reste tenu, est une seule action (mon choix, comme les flèches).
+  - `1` + molette sans sélection ne fait rien, comme avant. La touche est lue par sa place (`Digit1`), car `1` demande Maj sur un clavier AZERTY.
 - **Effacer** : `Suppr` et Retour arrière ; `Ctrl+X` coupe.
 - **Copier-coller** par le presse-papiers du système, au format du dessin. On colle à la même place et à la même taille à l'écran qu'à la copie, avec un décalage de 20 px si la copie tomberait exactement sur l'original. Ce qui est collé devient la sélection, comme ce qu'ajoute `Ctrl+O`.
 - **Interface** : rien que le dessin.
@@ -423,7 +436,7 @@ Sébastien veut la rotation tôt : dans l'ancienne version, il l'avait faite tar
   - `itemBounds`, `boundsOf` et `boundsToScreen` (devenue `viewBounds` avec la rotation) donnent des boîtes exactes, mémorisées par section et par objet.
 - **Éditeur** :
   - La sélection est un ensemble d'objets du premier niveau, gardés par identité. À chaque changement des objets, `Ctrl+Z` compris, elle ne garde que ceux encore présents.
-  - Un appui sur un objet est un clic (l'étape 3 en fera un déplacement). Ailleurs, il devient un rectangle au-delà de 4 px. Le coin de départ est un point exact du monde : on peut zoomer ou déplacer la vue pendant le tracé, et le rectangle prend à toute profondeur.
+  - Un appui sur un objet est un clic (l'étape 3 en a fait un déplacement). Ailleurs, il devient un rectangle au-delà de 4 px. Le coin de départ est un point exact du monde : on peut zoomer ou déplacer la vue pendant le tracé, et le rectangle prend à toute profondeur.
   - Alt+clic prend l'objet sous le plus profond des objets sélectionnés à cet endroit (sous celui du dessus si aucun ne l'est), puis repart du haut. Maj+Alt+clic ajoute cet objet.
   - Maj+clic dans le vide garde la sélection ; Maj+rectangle ajoute.
   - Effacer, grouper et dégrouper sont chacun une action, et terminent d'abord l'appui sur `²` en cours. Sélectionner ne le termine pas. Maj+G demande au moins deux objets.
@@ -540,6 +553,37 @@ Décisions dans « La rotation : décisions », paragraphe « Miroir de la vue �
 **Contrôle par mutation** : 36 modifications volontaires, toutes tuées à la fin. Au premier passage, 3 survivaient :
 - dans une vue retournée à 180°, `c − ψ` et `ψ − c` donnent la même droite : un test dans une vue retournée et tournée de 30° les sépare ;
 - le test de pause tirait la corde vers un pointeur aligné avec le bout du trait, donc au même endroit avec ou sans `Rope.mirrored` : le pointeur est maintenant à côté.
+
+## Étape 3 de la sélection : déplacer, zoomScroll, craneScroll (2026-11-08)
+
+Décisions dans « La sélection : décisions », aux paragraphes « précisé le 2026-11-08 ».
+
+- **Ce qui suit la vue** (`followingView`, `packages/engine/src/transform.ts`) : la transformation qui, composée après celle d'un objet, le laisse tel qu'il était à l'écran quand la vue passe de `avant` à `après`, décalé d'un certain nombre de pixels.
+  - C'est une similitude de pivot `avant.center` et de position `après.center + worldOffset(décalage)`.
+  - Vue inchangée : exactement un déplacement de `worldOffset(décalage)`, à toute profondeur.
+  - Zoom, déplacement de la vue, rotation et miroir passent tous par elle : l'éditeur n'a qu'un seul calcul.
+- **Tenir** (`Grab`, `apps/zveceditor/src/editor.ts`) : dès l'appui sur un objet, la sélection est réglée et tenue.
+  - À chaque événement, tout est recalculé depuis l'état à l'appui : rien ne s'additionne, donc aucune dérive, même après des centaines de crans.
+  - Le geste devient actif au-delà de 4 px, ou dès que la vue change (molette, bouton droit, `R`, `F`+Maj, `0`). Tout le geste est une seule action.
+  - Tant qu'une sélection est tenue, rien d'autre ne change les objets : effacer, grouper, annuler, `K`, `Ctrl+O`, `Ctrl+A`, tourner, flèches, `1` + molette sont sans effet.
+- **Maj + molette en tenant** : `levels = round(log2(zoom fait depuis l'appui))`. L'échelle de l'objet est celle de l'appui × `2^-levels`, exactement. `sizeOnScreen` retient de combien l'objet a grossi à l'écran, autour du pointeur. Un cran sans Maj garde cette taille.
+- **Une suite de petits changements** (`changeSelectedInRun`) : flèches et `1` + molette ne font qu'une action tant que ni la sélection ni les objets n'ont changé autrement. `1` relâché termine la suite.
+- **Page** : `1` est lu par sa place (`Digit1`). Avec Maj, certains navigateurs transforment la molette en défilement de côté : `deltaY` vaut 0 et la valeur est dans `deltaX`, que la page prend alors. Le curseur devient une main fermée pendant le déplacement.
+
+**Limite connue** : la composition avec un zoom a pour pivot le centre de la vue. L'erreur vaut environ 1e-16 × la distance en pixels entre ce centre et le pivot de l'objet. C'est négligeable, sauf pour un objet immense dont on a zoomé très loin à l'intérieur et qu'on emporte à la molette (vers 2^50 px et au-delà). Un déplacement simple reste exact.
+
+**Choix par défaut, à faire juger** : `1` + molette ne fait rien tant qu'on tient un objet ; pendant un trait, la molette zoome, même avec `1` tenu.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements synthétiques passant par `main.ts`) :
+- glisser un trait, curseur en main fermée ; flèche (touche empêchée de faire défiler la page) et Maj+flèche ;
+- zoomScroll de 5 crans sans bouger le pointeur ; Maj + molette transformée en défilement de côté (`deltaX`), échelle exactement `2^-2` ;
+- `R`+Maj+`H` en tenant : l'objet reste sous le pointeur ; `Échap` remet objet, sélection et vue ;
+- `Digit1` avec `key: "&"`, comme sur AZERTY : ×1,2, puis ×2 avec Maj, et `Ctrl+Z` annule toute la suite ;
+- flèches sans sélection : le dessin part à l'opposé ; aucune erreur.
+
+**Mesure** : pour un trait de 4 000 points, une image pendant le déplacement prend 115 ms, dont 102 ms déjà présentes pour un dessin immobile (le tracé du contour). Traiter un mouvement du pointeur prend 0,1 ms. Le coût vient du dessin, pas du déplacement.
+
+**Contrôle par mutation** : 46 modifications volontaires, toutes tuées à la fin. Au premier passage, 8 survivaient, chacune signalant un cas absent des tests : un déplacement de vue de moins de 4 px, Alt sur un objet déjà sélectionné, l'arrondi du niveau vers 1,73, l'emplacement exact autour du pointeur avec Maj, `Ctrl+A` avec un autre objet présent, un trait tracé au milieu d'une suite de flèches, et `0` en tenant.
 
 ## Critères de réussite du tronçon
 

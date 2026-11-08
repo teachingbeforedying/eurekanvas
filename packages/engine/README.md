@@ -21,7 +21,7 @@ at any zoom depth, objects, z-index, save and load.
 - `src/drawing.ts`: the objects of a drawing (strokes and nested groups, each with an optional transform) and
   its JSON form (specified in [docs/drawing-format.md](../../docs/drawing-format.md)).
 - `src/transform.ts`: where an object is placed: a similarity (turn, scale, mirror) around an exact pivot near
-  the object, then an exact position.
+  the object, then an exact position; and what keeps a held object as it looks on the screen when the view changes.
 - `src/placement.ts`: the sections of an object where its transforms put them, and their projection to the
   screen.
 - `src/render.ts`: the `Renderer` interface a drawing library implements, the `Scene` it draws (selection

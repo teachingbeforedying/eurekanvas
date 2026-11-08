@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Point, type Viewport, createCamera, worldToScreen } from "./camera";
+import { type Point, type Viewport, createCamera, worldOffset, worldToScreen } from "./camera";
 import { type Item, withTransform } from "./drawing";
 import { type Dyadic, add, equals, fromNumber, shift, sub, toNumber } from "./dyadic";
 import { boundsFromCorners, itemBounds, itemFrame, itemsAt, itemsInRectangle, rectangleCenter, selectionFrame, worldRectangle } from "./hit";
@@ -11,8 +11,11 @@ import {
   applyTransform,
   composeTransforms,
   createTransform,
+  followingView,
   isIdentity,
   mirroredAcross,
+  movedBy,
+  scaledAround,
   turnedAround,
 } from "./transform";
 import { createRandom } from "./test-utils";
@@ -187,6 +190,70 @@ describe("placed objects", () => {
     expect(itemsAt([bigger], camera, viewport, { x: 700, y: 367 })).toEqual([0]);
     expect(itemsAt([bigger], camera, viewport, { x: 700, y: 369 })).toEqual([]);
     expect(placedSections(bigger)[0]?.zLevel).toBe(-3);
+  });
+});
+
+describe("moving and scaling", () => {
+  it("moves the position by an exact offset, and nothing else", () => {
+    const t = createTransform({ origin: pt(1, 2), position: pt(3, 4), angle: 30, zLevel: 2, mirror: true });
+    const tiny = { x: shift(fromNumber(5), -700), y: fromNumber(-1) };
+    const moved = movedBy(t, tiny);
+    expect(same(moved.position, { x: add(fromNumber(3), tiny.x), y: fromNumber(3) })).toBe(true);
+    expect(moved).toMatchObject({ angle: 30, zLevel: 2, factor: 1, mirror: true });
+    expect(same(moved.origin, t.origin)).toBe(true);
+  });
+
+  it("scales around a point, exactly, without turning anything", () => {
+    const t = createTransform({ origin: pt(0, 0), position: pt(10, 20), angle: 45, factor: 1.5 });
+    const twice = scaledAround(t, pt(2, 4), 1, 1); // the position goes from (8, 16) of the center to (16, 32)
+    expect(same(twice.position, pt(18, 36))).toBe(true);
+    expect(twice).toMatchObject({ zLevel: 1, factor: 1.5, angle: 45 });
+    const back = scaledAround(twice, pt(2, 4), -1, 1);
+    expect(same(back.position, t.position)).toBe(true);
+    expect(back.zLevel).toBe(0);
+    const larger = scaledAround(t, pt(10, 20), 0, 1.5); // around its own position: it stays, and the factor overflows into the level
+    expect(same(larger.position, t.position)).toBe(true);
+    expect(larger).toMatchObject({ zLevel: 1, factor: 1.125 });
+  });
+});
+
+describe("what follows the view", () => {
+  it("keeps a point where it was on the screen, moved by the shift, whatever the two views", () => {
+    const random = createRandom(31);
+    for (let i = 0; i < 300; i++) {
+      const view = () =>
+        createCamera({
+          center: pt(random.next() * 100, random.next() * 100),
+          zLevel: random.int(20) - 10,
+          factor: 1 + random.next(),
+          angle: random.next() * 360,
+          mirror: random.next() < 0.5,
+        });
+      const [before, after] = [view(), view()];
+      const shifted = { x: random.next() * 50 - 25, y: random.next() * 50 - 25 };
+      const point = pt(random.next() * 100, random.next() * 100);
+      const seen = worldToScreen(before, viewport, point);
+      const now = worldToScreen(after, viewport, applyTransform(followingView(before, after, shifted), point));
+      expect(Math.abs(now.x - seen.x - shifted.x)).toBeLessThan(1e-6);
+      expect(Math.abs(now.y - seen.y - shifted.y)).toBeLessThan(1e-6);
+    }
+  });
+
+  it("is exactly a move when the view does not change, even deep down", () => {
+    const camera = createCamera({ center: { x: shift(fromNumber(3), -650), y: fromNumber(1) }, zLevel: 600, factor: 1.3, angle: 37, mirror: true });
+    const carrying = followingView(camera, camera, { x: 30, y: -40 });
+    expect(carrying).toMatchObject({ zLevel: 0, factor: 1, angle: 0, mirror: false });
+    const point = { x: add(camera.center.x, shift(fromNumber(7), -601)), y: camera.center.y };
+    const offset = worldOffset(camera, 30, -40);
+    expect(same(applyTransform(carrying, point), { x: add(point.x, offset.x), y: add(point.y, offset.y) })).toBe(true);
+    const t = createTransform({ origin: pt(0, 0), position: point, angle: 12 });
+    expect(composeTransforms(carrying, t)).toMatchObject({ zLevel: 0, factor: 1, angle: 12, mirror: false });
+  });
+
+  it("takes the change of scale it is given", () => {
+    const [before, after] = [createCamera({ factor: 1.5 }), createCamera({ zLevel: 3, factor: 1.1 })];
+    expect(followingView(before, after, { x: 0, y: 0 })).toMatchObject({ zLevel: -3, factor: 1.5 / 1.1 });
+    expect(followingView(before, after, { x: 0, y: 0 }, { zLevel: -2, factor: 1 })).toMatchObject({ zLevel: -2, factor: 1 });
   });
 });
 

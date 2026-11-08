@@ -15,7 +15,7 @@
  * transform loses nothing but the rounding of its own coefficients.
  */
 
-import { ORIGIN, type Point, type Turn, normalizeAngle, normalizeZoom, turnOf } from "./camera";
+import { type Camera, ORIGIN, type Point, type ScreenPoint, type Turn, normalizeAngle, normalizeZoom, turnOf, worldOffset } from "./camera";
 import { type Dyadic, add, equals, fromNumber, mul, neg, shift, sub } from "./dyadic";
 
 export interface Transform {
@@ -99,6 +99,47 @@ export function turnedAround(t: Transform, center: Point, degrees: number): Tran
     position: { x: add(center.x, offset.x), y: add(center.y, offset.y) },
     angle: normalizeAngle(t.angle + degrees),
   };
+}
+
+/** `T`, then a move by the exact offset `(offset.x, offset.y)`. */
+export function movedBy(t: Transform, offset: Point): Transform {
+  return { ...t, position: { x: add(t.position.x, offset.x), y: add(t.position.y, offset.y) } };
+}
+
+/** `T`, then a scale by `2^zLevel · factor` around the exact world point `center`. */
+export function scaledAround(t: Transform, center: Point, zLevel: number, factor: number): Transform {
+  const offset = turnedExactly(turnOf(0), zLevel, factor, sub(t.position.x, center.x), sub(t.position.y, center.y));
+  return {
+    ...t,
+    position: { x: add(center.x, offset.x), y: add(center.y, offset.y) },
+    ...normalizeZoom(t.zLevel + zLevel, t.factor * factor),
+  };
+}
+
+/**
+ * What brings an object along when the view goes from `before` to `after`: composed after the object's transform,
+ * it makes the object look on the screen as it did with `before`, moved by `shift` pixels. Without `zoom`, it also
+ * keeps its size on the screen; `zoom` (`2^zLevel · factor`) replaces the change of scale in the world.
+ *
+ * On the screen, a world point `w` was at `R₀ · M₀ · k₀ · (w − c₀)` from the middle. It must come at that same
+ * offset plus `shift`, seen through `after`: `c₁ + worldOffset(shift) + (k₀ / k₁) · M₁ · R(−a₁) · R₀ · M₀ · (w − c₀)`,
+ * and `M · R(b) = R(−b) · M`. With an unchanged view it is exactly a move by `worldOffset(shift)`.
+ */
+export function followingView(
+  before: Camera,
+  after: Camera,
+  shift: ScreenPoint,
+  zoom: { readonly zLevel: number; readonly factor: number } = { zLevel: before.zLevel - after.zLevel, factor: before.factor / after.factor },
+): Transform {
+  const offset = worldOffset(after, shift.x, shift.y);
+  const turn = before.angle - after.angle;
+  return createTransform({
+    origin: before.center,
+    position: { x: add(after.center.x, offset.x), y: add(after.center.y, offset.y) },
+    ...zoom,
+    angle: after.mirror ? -turn : turn,
+    mirror: before.mirror !== after.mirror,
+  });
 }
 
 /**

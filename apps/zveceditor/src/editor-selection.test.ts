@@ -161,7 +161,7 @@ describe("the rectangle", () => {
     click(editor, { x: 125, y: 200 });
     expect(drag(editor, { x: 300, y: 300 }, { x: 303, y: 302 })).toBeNull(); // a click on empty space
     expect(selected(editor)).toEqual([]);
-    expect(drag(editor, { x: 125, y: 100 }, { x: 400, y: 400 })).toBeNull(); // pressed on a: a click on a
+    expect(drag(editor, { x: 125, y: 100 }, { x: 127, y: 101 })).toBeNull(); // pressed on a, not far: a click on a
     expect(editor.band).toBeNull();
     expect(selected(editor)).toEqual([a]);
   });

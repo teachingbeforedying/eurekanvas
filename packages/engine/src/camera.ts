@@ -165,7 +165,7 @@ export function log2Scale(camera: Camera): number {
  * The world offset corresponding to an offset of `(dx, dy)` pixels on the screen. Exact once the turned-back
  * pixels are computed; always computed the same way, so that zooming, turning and mirroring can rely on it.
  */
-function worldOffset(camera: Camera, dx: number, dy: number): Point {
+export function worldOffset(camera: Camera, dx: number, dy: number): Point {
   const back = unturned(turnOf(camera.angle), dx / camera.factor, dy / camera.factor);
   const y = camera.mirror ? -back.y : back.y;
   return { x: shift(fromNumber(back.x), -camera.zLevel), y: shift(fromNumber(y), -camera.zLevel) };
