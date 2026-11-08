@@ -52,11 +52,25 @@ import {
 } from "@eurekanvas/engine";
 import { Rope } from "./rope";
 
+type BrushOutline = NonNullable<Scene["brushOutline"]>;
+
 /** The same wheel step as the previous version of the engine: one notch (a `deltaY` of 100) is a factor of 1.2 or 0.8. */
 export const WHEEL_STEP = 1 / 500;
 
-/** Thickness of the stroke on the screen, in pixels, at the moment it is drawn. */
-export const STROKE_WIDTH_PIXELS = 3;
+/** Thickness of the brush on the screen, in pixels, until it is changed. */
+export const DEFAULT_BRUSH_WIDTH = 3;
+
+/** The thinnest and the thickest brush, in pixels on the screen. */
+export const MIN_BRUSH_WIDTH = 0.5;
+export const MAX_BRUSH_WIDTH = 128;
+
+/**
+ * Over how many pixels of the stroke its thickness reaches the brush again after a notch of the wheel: at least
+ * `WIDTH_GLIDE_PIXELS`, and `WIDTH_GLIDE_PER_THICKNESS` times the brush beyond that. A notch changes the thickness in
+ * proportion, so a distance in proportion keeps the sides of the stroke equally gentle for a thick brush.
+ */
+export const WIDTH_GLIDE_PIXELS = 30;
+export const WIDTH_GLIDE_PER_THICKNESS = 3;
 
 /** The lengths, in pixels, that the keys step through for the rope of fixed length. */
 export const ROPE_LENGTHS = [4, 8, 16, 32, 64, 128] as const;
@@ -225,7 +239,11 @@ export interface EditorStats {
  *   stroke when the button is released;
  * - wheel: zoom around the pointer, also while drawing. The point of the world under the pointer does not
  *   move, so zooming alone adds nothing to the stroke: the next pointer move continues it, with the
- *   thickness that makes it `STROKE_WIDTH_PIXELS` thick on the screen at that moment;
+ *   thickness of its end on the screen, which glides back to the brush along the stroke (see `WIDTH_GLIDE_PIXELS`);
+ * - with the drawing key held, or during a stroke, the wheel changes the thickness of the brush if the width key
+ *   (`B`) is held, or for this stroke only once the scale key (`1`) has been tapped. It does what a zoom would do to
+ *   the stroke, the other way round: a zoom changes the end of the stroke on the screen, this changes the brush, and
+ *   the stroke glides from one to the other in the same way;
  * - with the turning key (`R`) held, the pointer turns the view around the middle of the screen, like a knob:
  *   by the angle it sweeps around the middle, in steps of `TURN_STEP_DEGREES` with Shift. Also while
  *   drawing: the stroke is paused, as when the view is moved;
@@ -273,6 +291,17 @@ export class Editor {
   private run: Run | null = null;
   /** The scale key (`1`) is held: the wheel changes the scale of the selection. */
   private craneKeyHeld = false;
+  private _brushWidth = DEFAULT_BRUSH_WIDTH;
+  /** The width key (`B`) is held. */
+  private widthKeyHeld = false;
+  /** While the wheel changes the brush for this stroke only: the thickness to come back to. */
+  private elasticFrom: number | null = null;
+  /** The thickness of the end of the stroke on the screen, which glides towards the brush. */
+  private inkWidth = DEFAULT_BRUSH_WIDTH;
+  /** How many pixels of stroke are left for `inkWidth` to reach the brush. */
+  private glideLeft = 0;
+  /** The pointer is over the drawing, at `last`. */
+  private pointerInside = false;
   /**
    * While the turning key is held: the angle of the view when it was pressed (or after the last quarter turn),
    * and the angle the pointer has swept since, before any rounding to steps.
@@ -339,7 +368,69 @@ export class Editor {
       selectedSections: shape.sections,
       selectionFrame: shape.frame,
       band: this.band,
+      brushOutline: this.brushOutline,
     };
+  }
+
+  /** The brush around the pointer, as long as the drawing key or the width key is held and no stroke is being drawn. */
+  get brushOutline(): BrushOutline | null {
+    if (!this.pointerInside || this.isDrawing || !(this.drawKeyHeld || this.widthKeyHeld)) return null;
+    return { center: this.last, radius: this._brushWidth / 2 };
+  }
+
+  /** The thickness of the brush now, in pixels on the screen. */
+  get brushWidth(): number {
+    return this._brushWidth;
+  }
+
+  /** The thickness of the brush once a change for this stroke only is over: what is worth remembering. */
+  get settledBrushWidth(): number {
+    return this.elasticFrom ?? this._brushWidth;
+  }
+
+  /** Changes the thickness of the brush, brought within its limits. */
+  setBrushWidth(width: number): void {
+    if (!Number.isFinite(width)) throw new RangeError(`brush width must be finite, got ${width}`);
+    this._brushWidth = Math.min(MAX_BRUSH_WIDTH, Math.max(MIN_BRUSH_WIDTH, width));
+  }
+
+  /** The width key (`B`) was pressed or released. */
+  setWidthKeyHeld(held: boolean): void {
+    this.widthKeyHeld = held;
+  }
+
+  /** The drawing key is held or a stroke is being drawn: `B` and a tap on `1` are about the brush. */
+  private get isDrawingMode(): boolean {
+    return this.drawKeyHeld || this.isDrawing;
+  }
+
+  /** A notch of the wheel: the thickness of the stroke starts gliding towards the brush, from where it is. */
+  private startGlide(): void {
+    this.glideLeft = Math.max(WIDTH_GLIDE_PIXELS, WIDTH_GLIDE_PER_THICKNESS * this._brushWidth);
+  }
+
+  /** The thickness of the end of the stroke once it has gone `distance` pixels further: closer to the brush, in a straight line. */
+  private glidedInk(distance: number): number {
+    if (distance >= this.glideLeft) {
+      this.glideLeft = 0;
+      this.inkWidth = this._brushWidth;
+    } else {
+      this.inkWidth += ((this._brushWidth - this.inkWidth) * distance) / this.glideLeft;
+      this.glideLeft -= distance;
+    }
+    return this.inkWidth;
+  }
+
+  /** The change of the brush for this stroke only is over. */
+  private endElastic(): void {
+    if (this.elasticFrom === null) return;
+    this._brushWidth = this.elasticFrom;
+    this.elasticFrom = null;
+  }
+
+  /** The pointer left the drawing. */
+  pointerLeft(): void {
+    this.pointerInside = false;
   }
 
   private shapeOfSelection(): { readonly sections: ReadonlySet<PlacedSection>; readonly frame: OrientedRectangle | null } {
@@ -419,7 +510,8 @@ export class Editor {
       }
       this.recorder = new StrokeRecorder();
       this.rope = ropeFor(this._pen);
-      this.recorder.addScreenPoint(this._camera, this._viewport, this.rope.start(p, time), STROKE_WIDTH_PIXELS);
+      this.inkWidth = this._brushWidth;
+      this.recorder.addScreenPoint(this._camera, this._viewport, this.rope.start(p, time), this.inkWidth);
     } else {
       this.panButtons += 1;
       this.last = p;
@@ -429,6 +521,7 @@ export class Editor {
   pointerMove(p: ScreenPoint, time = performance.now(), modifiers: Modifiers = {}): void {
     const dx = p.x - this.last.x;
     const dy = p.y - this.last.y;
+    this.pointerInside = true;
     if (this.turningSelection) {
       this.turnSelectionByPointer(p, modifiers.shift === true);
     } else if (this.turning) {
@@ -440,8 +533,9 @@ export class Editor {
     } else if (this.recorder && this.mirrorKeyHeld) {
       // paused: the stroke goes on from where it was when the key is released
     } else if (this.recorder) {
+      const from = this.rope.position;
       const brush = this.rope.move(p, time);
-      if (brush) this.recorder.addScreenPoint(this._camera, this._viewport, brush, STROKE_WIDTH_PIXELS);
+      if (brush) this.recorder.addScreenPoint(this._camera, this._viewport, brush, this.glidedInk(Math.hypot(brush.x - from.x, brush.y - from.y)));
     } else if (this.press && this.press.target === undefined && !this.press.dragging) {
       const start = worldToScreen(this._camera, this._viewport, this.press.start);
       if (Math.hypot(p.x - start.x, p.y - start.y) > DRAG_THRESHOLD_PIXELS) this.press.dragging = true;
@@ -474,6 +568,7 @@ export class Editor {
       this.recorder = null;
       if (this.hold) this.hold.count += 1;
       if (!this.drawKeyHeld) this.endHold(); // the key was released during the stroke
+      this.endElastic();
       return null;
     }
     const turning = this.turningSelection;
@@ -859,8 +954,12 @@ export class Editor {
     this.changeSelectedInRun("crane", (item) => withTransform(item, scaledAround(transformOf(item), center, zLevel, factor)));
   }
 
-  /** The scale key (`1`) was pressed or released: while it is held, the wheel changes the scale of the selection. */
+  /**
+   * The scale key (`1`) was pressed or released: while it is held, the wheel changes the scale of the selection.
+   * Tapped with the drawing key held or during a stroke, it makes the wheel change the brush for this stroke only.
+   */
   setCraneKeyHeld(held: boolean): void {
+    if (this.craneKeyHeld && !held && this.isDrawingMode) this.elasticFrom ??= this._brushWidth;
     this.craneKeyHeld = held;
     if (!held && this.run?.kind === "crane") this.run = null;
   }
@@ -909,8 +1008,12 @@ export class Editor {
    */
   setDrawKeyHeld(held: boolean): void {
     this.drawKeyHeld = held;
-    if (held) this.hold ??= { count: 0 };
-    else if (!this.isDrawing) this.endHold();
+    if (held) {
+      this.hold ??= { count: 0 };
+    } else if (!this.isDrawing) {
+      this.endHold();
+      this.endElastic();
+    }
   }
 
   /** Makes one object of the strokes of the hold, with one action to undo instead of one per stroke. */
@@ -933,18 +1036,31 @@ export class Editor {
   }
 
   /**
-   * The wheel. With the scale key held, it changes the scale of the selection, and nothing else. Otherwise it zooms
-   * around `p`, and what is held stays as it looks on the screen; with Shift, the scale of what is held stays a whole
-   * power of 2 away from what it was at the press: the closest to the zoom made.
+   * The wheel. In drawing mode, with the width key held or after a tap on the scale key, it changes the brush. With
+   * the scale key held, out of drawing mode, it changes the scale of the selection, and nothing else. Otherwise it
+   * zooms around `p`, and what is held stays as it looks on the screen; with Shift, the scale of what is held stays a
+   * whole power of 2 away from what it was at the press: the closest to the zoom made.
    */
   wheel(p: ScreenPoint, deltaY: number, modifiers: Modifiers = {}): void {
-    if (this.craneKeyHeld && !this.isDrawing) {
+    if (this.isDrawingMode && (this.widthKeyHeld || this.elasticFrom !== null)) {
+      if (deltaY !== 0) {
+        // as if the view had zoomed: zooming out makes the brush larger on the drawing
+        this.setBrushWidth(this._brushWidth / wheelZoomFactor(deltaY));
+        this.startGlide();
+      }
+      return;
+    }
+    if (this.craneKeyHeld && !this.isDrawingMode) {
       this.craneSelection(deltaY, modifiers.shift === true);
       return;
     }
     const ratio = wheelZoomFactor(deltaY);
     this._camera = zoomAt(this._camera, this._viewport, p, ratio);
-    if (this.recorder) this.rope.zoomed(p, ratio); // the end of the stroke stays on the drawing
+    if (this.recorder) {
+      this.rope.zoomed(p, ratio); // the end of the stroke stays on the drawing, and looks larger or smaller on the screen
+      this.inkWidth *= ratio;
+      this.startGlide();
+    }
     const grab = this.grab;
     if (grab === null) return;
     grab.levels = null;

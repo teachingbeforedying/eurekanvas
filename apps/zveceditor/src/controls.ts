@@ -1,5 +1,6 @@
 import {
   type Button,
+  DEFAULT_BRUSH_WIDTH,
   DEFAULT_LAG,
   DEFAULT_PEN,
   DEFAULT_ROPE_LENGTH,
@@ -78,6 +79,12 @@ export function parseStoredPen(stored: string | null): Pen {
     length: one<number>(ROPE_LENGTHS, fields.length, DEFAULT_PEN.length),
     lag: one<number>(LAG_TIMES, fields.lag, DEFAULT_PEN.lag),
   };
+}
+
+/** Reads a thickness of the brush that was stored as text. Anything but a positive number gives the default one. */
+export function parseStoredBrushWidth(stored: string | null): number {
+  const width = stored === null ? Number.NaN : Number(stored);
+  return Number.isFinite(width) && width > 0 ? width : DEFAULT_BRUSH_WIDTH;
 }
 
 export const DRAWING_FILE_EXTENSION = ".zvec.json";

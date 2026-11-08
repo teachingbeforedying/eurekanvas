@@ -1,4 +1,4 @@
-import { Color, type FabricObject, Path, Rect, StaticCanvas, util } from "fabric";
+import { Circle, Color, type FabricObject, Path, Rect, StaticCanvas, util } from "fabric";
 import {
   type PathCommand,
   type Renderer,
@@ -35,6 +35,9 @@ const FRAME_PADDING = 4;
 
 /** How far beyond the screen, in pixels, a side of the frame or of the rectangle is drawn at most. */
 const OFF_SCREEN_MARGIN = 10;
+
+/** Colour of the circle that shows the brush: visible on the white page as on a black stroke. */
+const BRUSH_OUTLINE_COLOR = "#888888";
 
 /** Opacity of the inside of the selection rectangle. */
 const BAND_FILL_OPACITY = 0.12;
@@ -81,6 +84,7 @@ export class FabricRenderer implements Renderer {
   private readonly maxLevelGap: number | undefined;
   private readonly frame: Rect;
   private readonly band: Rect;
+  private readonly brushOutline: Circle;
   private shown: FabricObject[] = [];
   private drawn = 0;
 
@@ -98,6 +102,7 @@ export class FabricRenderer implements Renderer {
     const box = { originX: "left", originY: "top", strokeWidth: 1, objectCaching: false, selectable: false, evented: false } as const;
     this.frame = new Rect({ ...box, fill: "", stroke: this.selectionColor, strokeDashArray: DASHES });
     this.band = new Rect({ ...box });
+    this.brushOutline = new Circle({ ...box, originX: "center", originY: "center", fill: "", stroke: BRUSH_OUTLINE_COLOR });
   }
 
   /** How many sections the last `render` call drew. */
@@ -136,6 +141,12 @@ export class FabricRenderer implements Renderer {
         strokeDashArray: mode === "inside" ? null : DASHES,
       });
       if (placeBox(this.band, box, scene.viewport)) next.push(this.band);
+    }
+    if (scene.brushOutline) {
+      const { center, radius } = scene.brushOutline;
+      this.brushOutline.set({ left: center.x, top: center.y, radius });
+      this.brushOutline.setCoords();
+      next.push(this.brushOutline);
     }
 
     if (this.shown.length > 0) this.canvas.remove(...this.shown);

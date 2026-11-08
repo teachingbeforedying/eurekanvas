@@ -30,6 +30,8 @@ export interface Scene {
   readonly selectionFrame?: OrientedRectangle | null;
   /** The rectangle being dragged to select, if any. */
   readonly band?: SelectionBand | null;
+  /** The brush around the pointer, on the screen, if it is shown. */
+  readonly brushOutline?: { readonly center: ScreenPoint; readonly radius: number } | null;
 }
 
 export interface Renderer {

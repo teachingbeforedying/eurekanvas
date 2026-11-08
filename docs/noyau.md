@@ -361,6 +361,22 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 
 **Non prévu pour l'instant** : poignées, lasso, verrouillage, ordre d'affichage, aimantation à une grille.
 
+## L'épaisseur du pinceau : décisions (2026-11-08)
+
+Sébastien l'a demandée avant l'étape 4 de la sélection. Rien ne lie les deux, et le moteur stocke déjà une épaisseur par point.
+
+**Ce que faisait l'ancienne version** (`3DRoom+ic.html`) : `B` + molette, seulement en mode dessin (L77337, L34315), ±5 par cran, de 0 à 40, 20 par défaut (L73417). Chaque cran coupait le trait (L34328). En mode dessin, taper `1` rendait la molette élastique sans tenir `B` ; l'épaisseur revenait à sa valeur au relâchement du bouton (L75831, L77254). « Comme le freeDrawingZscroll, mais sans suivre le zoom » (`still_book.txt`).
+
+**Décisions de Sébastien** :
+- `B` + molette règle l'épaisseur, seulement avec `²` tenu ou pendant un trait. Sans cela, la molette zoome.
+- Le brushWidthScroll fait la même chose que le freeDrawingZoomScroll, mais la vue ne bouge pas : même loi par cran (épaisseur ÷ le facteur du zoom), donc plus épais quand on tire la molette vers soi, comme en dézoomant (÷0,8 vers soi, ÷1,2 vers l'avant). De 0,5 à 128 px à l'écran : pour plus gros, on dézoome. On part de 3 px.
+- Un seul lissage, pour le zoom pendant un trait comme pour le pinceau : l'épaisseur rejoint sa cible sur 30 px de tracé, ou 3 fois l'épaisseur de la brosse quand c'est plus (au-delà de 10 px), comptés depuis le dernier cran. Chaque cran relance le lissage à partir de l'épaisseur du moment.
+- Le mode élastique revient : taper `1` avec `²` tenu ou pendant un trait rend la molette « épaisseur », sans tenir `B`, jusqu'au relâchement du bouton (ou de `²`, sans trait), puis l'épaisseur reprend sa valeur.
+- Un cercle fin de la vraie taille autour du pointeur tant que `B` ou `²` est tenu, sans tracer, et un message bref quand elle change.
+- L'épaisseur réglée est retenue par le navigateur, comme le stylo, pas dans le dessin.
+
+**Conséquence** (mon choix) : avec `²` tenu ou pendant un trait, `1` ne change plus l'échelle de la sélection. Comme avant, c'est alors la touche élastique.
+
 ## La rotation : décisions (2026-10-31)
 
 Sébastien veut la rotation tôt : dans l'ancienne version, il l'avait faite tard et elle lui avait coûté beaucoup d'efforts. Elle passe avant l'étape 3 de la sélection.
@@ -584,6 +600,32 @@ Décisions dans « La sélection : décisions », aux paragraphes « précisé l
 **Mesure** : pour un trait de 4 000 points, une image pendant le déplacement prend 115 ms, dont 102 ms déjà présentes pour un dessin immobile (le tracé du contour). Traiter un mouvement du pointeur prend 0,1 ms. Le coût vient du dessin, pas du déplacement.
 
 **Contrôle par mutation** : 46 modifications volontaires, toutes tuées à la fin. Au premier passage, 8 survivaient, chacune signalant un cas absent des tests : un déplacement de vue de moins de 4 px, Alt sur un objet déjà sélectionné, l'arrondi du niveau vers 1,73, l'emplacement exact autour du pointeur avec Maj, `Ctrl+A` avec un autre objet présent, un trait tracé au milieu d'une suite de flèches, et `0` en tenant.
+
+## L'épaisseur du pinceau : livraison (2026-11-08)
+
+Décisions dans « L'épaisseur du pinceau : décisions ».
+
+- **Les « bumps »** : Sébastien a vu des bosses dans le freeDrawingZoomScroll après avoir épaissi la brosse. Le code du zoom n'avait pas changé. Un cran change l'épaisseur de 20 à 25 %, et ce saut passait sur un seul segment de quelques pixels : 0,85 px à 3 px (invisible), 3,4 px à 12 px, 8,5 px à 30 px.
+- **Éditeur** (`apps/zveceditor/src/editor.ts`) : `brushWidth` remplace la constante `STROKE_WIDTH_PIXELS` (devenue `DEFAULT_BRUSH_WIDTH`). Le moteur et le format ne changent pas.
+  - **Un seul calcul** : `inkWidth` est l'épaisseur du bout du trait à l'écran, et `glideLeft` ce qui reste de tracé pour rejoindre la brosse. Un cran de zoom change `inkWidth` (×r : l'encre grossit ou rétrécit à l'écran), un cran de pinceau change la brosse (÷r). Les deux relancent le lissage, et l'épaisseur va en ligne droite vers sa cible. Sur le dessin, les deux gestes donnent exactement la même épaisseur.
+  - **La distance suit la brosse** : `max(30, 3 × brosse)`. Un cran change l'épaisseur en proportion : avec une distance fixe de 30 px, le flanc était 20 fois plus raide à 64 px qu'à 3 px (15° contre 0,7°). Avec une distance en proportion, il reste à 1,9° au plus (mesuré à 30, 64 et 128 px). En contrepartie, à 128 px, la transition s'étale sur 384 px de tracé, soit 3 fois la largeur du trait, comme à toute taille.
+  - Les pixels sont comptés le long du tracé du pinceau, donc derrière la corde. La main immobile, rien ne change. À 30 px, le plus grand saut par segment tombe de 8,5 px à 0,35 px ; à 3 px, de 0,85 px à 0,10 px.
+  - Le « mode dessin » est `²` tenu ou un trait en cours. La molette y règle le pinceau si `B` est tenu, ou après un tap sur `1`.
+  - L'élastique retient l'épaisseur à laquelle revenir (`elasticFrom`). Un deuxième tap ne l'oublie pas. Il se termine au relâchement du bouton, ou de `²` sans trait. Perdre le focus pendant un trait ne compte pas comme un tap.
+- **Rendu** : `Scene.brushOutline`, un cercle gris de la vraie taille autour du pointeur, tant que `B` ou `²` est tenu sans tracer et que le pointeur est sur le dessin.
+- **Page** : message « brush 12 px » à chaque changement ; `settledBrushWidth` est retenue par le navigateur, donc un changement élastique ne s'enregistre pas. Maj+`B` ne se répète plus quand la touche reste tenue.
+
+**À juger** : `B` seul montre le rond, alors que sans `²` la molette zoome (réponses « rond quand `B` ou `²` » et « seulement avec `²` tenu »).
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements synthétiques passant par `main.ts`) :
+- le rond suit la taille (rayon 1,5 px, puis 11,2 px après 9 crans), absent sans touche ;
+- `²` + `B` + molette : la vue ne bouge pas, plus épais vers soi (« brush 3.8 px »), maximum 128, atteint en 17 crans depuis 3 px ; valeur retenue et relue après un rechargement ;
+- `B` seul : le rond, et la molette zoome ;
+- trait aminci en plein tracé et trait élastique : une seule section, effilés sans coupure, l'épaisseur revient au relâchement ;
+- zoom à 3 px, zoom à 30, 64 et 128 px et `B` + molette à 30 px, avec les mêmes crans : flancs de 0,6° à 1,9°, sans épaulement (capture) ;
+- Maj+`B` en répétition ne dégroupe pas ; aucune erreur.
+
+**Contrôle par mutation** : 46 modifications volontaires, toutes tuées à la fin sauf une, équivalente (`>=` ou `>` à la fin du lissage : même résultat). Au premier passage, d'autres survivaient : une perte de focus pendant un trait aurait lancé l'élastique, un cran nul relançait le lissage, et rien ne fixait le maximum : les tests les couvrent. Une dernière a montré une ligne inutile, retirée.
 
 ## Critères de réussite du tronçon
 

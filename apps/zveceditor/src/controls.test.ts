@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buttonChanges, describePen, drawingFileName, nextPen, parseStoredPen, stepPen } from "./controls";
-import { DEFAULT_LAG, DEFAULT_PEN, DEFAULT_ROPE_LENGTH, LAG_TIMES, type Pen, ROPE_LENGTHS } from "./editor";
+import { buttonChanges, describePen, drawingFileName, nextPen, parseStoredBrushWidth, parseStoredPen, stepPen } from "./controls";
+import { DEFAULT_BRUSH_WIDTH, DEFAULT_LAG, DEFAULT_PEN, DEFAULT_ROPE_LENGTH, LAG_TIMES, type Pen, ROPE_LENGTHS } from "./editor";
 
 describe("buttonChanges", () => {
   it("sees nothing when the buttons did not change", () => {
@@ -93,5 +93,13 @@ describe("drawingFileName", () => {
   it("names a saved drawing with the local date and time, with leading zeros", () => {
     expect(drawingFileName(new Date(2026, 9, 25, 15, 30))).toBe("drawing-2026-10-25-1530.zvec.json");
     expect(drawingFileName(new Date(2027, 0, 5, 7, 4))).toBe("drawing-2027-01-05-0704.zvec.json");
+  });
+});
+
+describe("parseStoredBrushWidth", () => {
+  it("reads a positive number, and gives the default width for anything else", () => {
+    expect(parseStoredBrushWidth("12.5")).toBe(12.5);
+    expect(parseStoredBrushWidth("0.5")).toBe(0.5);
+    for (const stored of [null, "", "  ", "0", "-4", "wide", "Infinity", "NaN"]) expect(parseStoredBrushWidth(stored)).toBe(DEFAULT_BRUSH_WIDTH);
   });
 });

@@ -13,7 +13,7 @@ import {
   toNumber,
   worldToScreen,
 } from "@eurekanvas/engine";
-import { Editor, STROKE_WIDTH_PIXELS, WHEEL_STEP, wheelZoomFactor } from "./editor";
+import { Editor, DEFAULT_BRUSH_WIDTH, WHEEL_STEP, wheelZoomFactor } from "./editor";
 
 const viewport: Viewport = { width: 1280, height: 720 };
 
@@ -91,7 +91,7 @@ describe("drawing", () => {
     editor.pointerMove({ x: 150, y: 120 });
     editor.pointerUp();
     const section = editor.scene.strokes[0]?.sections[0];
-    expect(section?.points.map((p) => p.width)).toEqual([STROKE_WIDTH_PIXELS, STROKE_WIDTH_PIXELS]);
+    expect(section?.points.map((p) => p.width)).toEqual([DEFAULT_BRUSH_WIDTH, DEFAULT_BRUSH_WIDTH]);
   });
 });
 
@@ -158,18 +158,33 @@ describe("zooming while drawing", () => {
     });
   });
 
-  it("keeps the pen thickness constant on the screen at every point", () => {
+  it("brings the thickness on the screen back to the brush once the wheel has stopped for 30 pixels of stroke", () => {
     const editor = drawingEditor();
-    const drawing = spiral(editor, 400, -60);
+    editor.pointerDown({ x: 400, y: 300 }, "primary");
+    for (let i = 1; i <= 50; i++) {
+      editor.pointerMove({ x: 400 + 2 * i, y: 300 });
+      editor.wheel({ x: 400 + 2 * i, y: 300 }, -60);
+    }
+    for (let i = 1; i <= 20; i++) editor.pointerMove({ x: 500 + 2 * i, y: 300 }); // 40 pixels without the wheel
     const stroke = editor.scene.strokes[0];
-    if (!stroke) throw new Error("no stroke");
-    // the points in drawing order, each junction once (as in `strokeWorldPoints`)
-    const widths = stroke.sections.flatMap((section, i) => section.points.slice(i === 0 ? 0 : 1).map((p) => p.width));
-    expect(widths).toHaveLength(drawing.exact.length + 1);
-    drawing.factors.forEach((factor, i) => {
-      // widths[0] is the first click; the event `i` is point `i + 1`
-      expect(Math.abs((widths[i + 1] ?? NaN) * factor - STROKE_WIDTH_PIXELS)).toBeLessThan(1e-9);
-    });
+    const section = stroke?.sections[stroke.sections.length - 1];
+    const last = section?.points[section.points.length - 1];
+    if (!last) throw new Error("no point");
+    expect(last.width * editor.camera.factor).toBeCloseTo(DEFAULT_BRUSH_WIDTH, 9);
+  });
+
+  it("lets the thickness glide after a notch: the end of the stroke keeps its place on the drawing, without a bump", () => {
+    const editor = drawingEditor();
+    editor.pointerDown({ x: 400, y: 300 }, "primary");
+    editor.pointerMove({ x: 450, y: 300 });
+    editor.wheel({ x: 450, y: 300 }, -100); // ×1.2: its end now looks 3.6 pixels thick
+    editor.pointerMove({ x: 460, y: 300 }); // a third of the way to 3
+    editor.pointerMove({ x: 470, y: 300 });
+    editor.pointerMove({ x: 490, y: 300 }); // there
+    editor.pointerMove({ x: 500, y: 300 }); // and it stays
+    const points = editor.scene.strokes[0]?.sections[0]?.points ?? [];
+    expect(points).toHaveLength(6);
+    [3, 3, 3.4 / 1.2, 3.2 / 1.2, 2.5, 2.5].forEach((width, i) => expect(points[i]?.width).toBeCloseTo(width, 9));
   });
 
   it("does not add a point when only the wheel turns", () => {

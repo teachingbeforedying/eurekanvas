@@ -1,6 +1,6 @@
 import { type Drawing, type ScreenPoint, type Viewport, drawingFromJSON, drawingToJSON, log2Scale } from "@eurekanvas/engine";
 import { FabricRenderer } from "@eurekanvas/renderer-fabric";
-import { buttonChanges, describePen, drawingFileName, nextPen, parseStoredPen, stepPen } from "./controls";
+import { buttonChanges, describePen, drawingFileName, nextPen, parseStoredBrushWidth, parseStoredPen, stepPen } from "./controls";
 import { Editor, type Modifiers, type Pen, type SelectionReport } from "./editor";
 import { keepUnreadable, loadAutosave, saveAutosave } from "./storage";
 
@@ -34,6 +34,22 @@ function choosePen(pen: Pen): void {
   }
 }
 editor.setPen(storedPen());
+
+// The thickness of the brush is remembered the same way.
+const BRUSH_STORAGE_KEY = "zveceditor.brushWidth";
+try {
+  editor.setBrushWidth(parseStoredBrushWidth(localStorage.getItem(BRUSH_STORAGE_KEY)));
+} catch {
+  // not remembered: the default one
+}
+function brushChanged(): void {
+  showMessage(`brush ${Number(editor.brushWidth.toFixed(1))} px`);
+  try {
+    localStorage.setItem(BRUSH_STORAGE_KEY, String(editor.settledBrushWidth));
+  } catch {
+    // not remembered, that is all
+  }
+}
 
 // The page shows nothing but the drawing. A message appears at the bottom for a moment; a warning that
 // something may be lost stays until it is clicked or Escape is pressed.
@@ -221,6 +237,7 @@ function updateHud(): void {
     `zoom 2^${log2Scale(camera).toFixed(2)}   (level ${camera.zLevel}, factor ${camera.factor.toFixed(3)})   angle ${Number(camera.angle.toFixed(2))}°${camera.mirror ? "   mirrored" : ""}`,
     `objects ${editor.items.length} · selected ${editor.selection.size} · strokes ${stats.strokes} · sections ${stats.sections} · points ${stats.points} · drawn sections ${renderer.drawnSections}`,
     describePen(editor.pen, editor.ropeNow),
+    `brush: ${Number(editor.brushWidth.toFixed(1))} px   (hold ² and B, turn the wheel; tap 1 while drawing: for this stroke only)`,
     `automatic save in this browser: ${autosave}`,
     ``,
     `draw: hold ² (the key left of 1), then the left button; the strokes drawn while ² stays held make one object`,
@@ -287,7 +304,9 @@ canvas.addEventListener("pointermove", (event) => {
 
 canvas.addEventListener("pointerleave", () => {
   pointer = null;
+  editor.pointerLeft();
   updateCursor();
+  invalidate();
 });
 
 function release(event: PointerEvent): void {
@@ -309,7 +328,9 @@ canvas.addEventListener(
     const unit = event.deltaMode === 1 ? 100 / 3 : event.deltaMode === 2 ? 800 : 1;
     // with Shift, browsers may turn the wheel into a sideways scroll
     const delta = event.shiftKey && event.deltaY === 0 ? event.deltaX : event.deltaY;
+    const width = editor.brushWidth;
     editor.wheel(position(event), delta * unit, { shift: event.shiftKey });
+    if (editor.brushWidth !== width) brushChanged();
     changed();
     invalidate();
   },
@@ -343,7 +364,10 @@ window.addEventListener("keydown", (event) => {
   if (event.code === "Backquote") {
     // the drawing key, read by its place (² on a French keyboard, ` on an English one)
     event.preventDefault();
-    if (!event.repeat) editor.setDrawKeyHeld(true);
+    if (!event.repeat) {
+      editor.setDrawKeyHeld(true);
+      invalidate(); // the brush appears around the pointer
+    }
   } else if (event.key === "Escape") {
     hideMessage();
     editor.cancel();
@@ -351,6 +375,11 @@ window.addEventListener("keydown", (event) => {
     invalidate();
   } else if (event.key === "Alt") {
     event.preventDefault(); // Alt+click takes the object below: Alt must not open the menu bar (Firefox) or focus the browser menu
+  } else if (!ctrl && !event.shiftKey && event.key.toLowerCase() === "b") {
+    if (!event.repeat) {
+      editor.setWidthKeyHeld(true);
+      invalidate(); // the brush appears around the pointer
+    }
   } else if (!ctrl && event.code === "Digit1") {
     // the scale key, read by its place: 1 needs Shift on a French keyboard
     if (!event.repeat) editor.setCraneKeyHeld(true);
@@ -424,7 +453,7 @@ window.addEventListener("keydown", (event) => {
     } else if (!editor.isDrawing) {
       showMessage("select at least two objects to group them");
     }
-  } else if (plain && event.shiftKey && event.key.toLowerCase() === "b") {
+  } else if (plain && event.shiftKey && event.key.toLowerCase() === "b" && !event.repeat) {
     const count = editor.ungroupSelection();
     if (count > 0) {
       showMessage(count === 1 ? "ungrouped 1 group" : `ungrouped ${count} groups`);
@@ -469,6 +498,10 @@ window.addEventListener("keyup", (event) => {
   if (event.key.toLowerCase() === "a") aDown = false;
   if (event.key === "Alt") event.preventDefault(); // Firefox opens its menu bar when Alt is released
   if (event.code === "Digit1") editor.setCraneKeyHeld(false);
+  if (event.key.toLowerCase() === "b") {
+    editor.setWidthKeyHeld(false);
+    invalidate();
+  }
   if (!event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "r") {
     rDown = false;
     editor.setTurnKeyHeld(false);
@@ -497,6 +530,7 @@ window.addEventListener("keyup", (event) => {
   if (event.code === "Backquote") {
     editor.setDrawKeyHeld(false); // the strokes of the hold become one object
     changed();
+    invalidate();
   }
 });
 
@@ -507,6 +541,7 @@ window.addEventListener("blur", () => {
   editor.setTurnKeyHeld(false);
   editor.setMirrorKeyHeld(false);
   editor.setCraneKeyHeld(false);
+  editor.setWidthKeyHeld(false);
   rDown = false;
   fDown = false;
   spaceDown = false;
