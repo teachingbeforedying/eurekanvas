@@ -56,6 +56,7 @@ export {
   composeTransforms,
   createTransform,
   followingView,
+  inverseTransform,
   isIdentity,
   mirroredAcross,
   movedBy,
@@ -71,6 +72,7 @@ export {
   placedSections,
   projectSection,
 } from "./placement";
+export { type Part, partOf, pathAt, replacedPart } from "./part";
 export { type OutlinePoint, type PathCommand, strokeOutline } from "./outline";
 export {
   type DrawableSection,

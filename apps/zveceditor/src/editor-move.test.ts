@@ -175,23 +175,23 @@ describe("dragging an object", () => {
     expect(editor.selection.size).toBe(2);
   });
 
-  it("with Alt, takes the object below at the press and moves it alone", () => {
+  it("with Ctrl, takes the object below at the press and moves it alone", () => {
     const editor = new Editor(viewport);
     const below = drawLine(editor, { x: 100, y: 100 }, { x: 200, y: 100 });
     const above = drawLine(editor, { x: 110, y: 100 }, { x: 190, y: 100 });
     const center = centerOf(below);
-    drag(editor, { x: 150, y: 100 }, { x: 150, y: 200 }, { alt: true });
+    drag(editor, { x: 150, y: 100 }, { x: 150, y: 200 }, { ctrl: true });
     expect(editor.items[1]).toBe(above);
     expect(samePoint(centerOf(editor.items[0] as Item), moved(center, 0, 100))).toBe(true);
     expect(only(editor)).toBe(editor.items[0]);
   });
 
-  it("with Alt, moves that object alone even when everything is selected", () => {
+  it("with Ctrl, moves that object alone even when everything is selected", () => {
     const editor = new Editor(viewport);
     const below = drawLine(editor, { x: 100, y: 100 }, { x: 200, y: 100 });
     drawLine(editor, { x: 110, y: 100 }, { x: 190, y: 100 });
     editor.selectAll();
-    drag(editor, { x: 150, y: 100 }, { x: 150, y: 200 }, { alt: true }); // below the deepest selected one: the top one again
+    drag(editor, { x: 150, y: 100 }, { x: 150, y: 200 }, { ctrl: true }); // below the deepest selected one: the top one again
     expect(editor.items[0]).toBe(below);
     expect(only(editor)).toBe(editor.items[1]);
     expect(editor.items[1]?.transform).toBeDefined();

@@ -5,6 +5,7 @@ import {
   type Item,
   ORIGIN,
   type OrientedRectangle,
+  type Part,
   type PlacedSection,
   type Point,
   type RectangleMode,
@@ -32,9 +33,12 @@ import {
   movedBy,
   normalizeZoom,
   pan,
+  partOf,
+  pathAt,
   placedAlone,
   placedSections,
   rectangleCenter,
+  replacedPart,
   rotateAt,
   scaledAround,
   screenRectangle,
@@ -130,6 +134,12 @@ export type Button = "primary" | "middle" | "secondary";
 export interface Modifiers {
   readonly shift?: boolean;
   readonly alt?: boolean;
+  readonly ctrl?: boolean;
+}
+
+/** Whether `path` begins with `prefix`. */
+function startsWith(path: readonly number[], prefix: readonly number[]): boolean {
+  return prefix.every((index, i) => path[i] === index);
 }
 
 /** What a selection took: how many objects are selected, and how many of them are not drawn on the screen. */
@@ -161,6 +171,8 @@ interface Press {
 interface Grab {
   readonly before: readonly Item[];
   readonly selected: readonly Item[];
+  /** The part being held, if it is a part of an object. */
+  readonly part: Part | null;
   readonly camera: Camera;
   readonly from: ScreenPoint;
   /** The pointer the objects follow: it stays where it was while the turning key is held. */
@@ -229,8 +241,10 @@ export interface EditorStats {
  *   held, the primary button moves the view;
  * - primary button with neither key: select. A click takes the topmost object under the pointer (a whole
  *   top-level object, even when a stroke of a group is clicked) or deselects on empty space; with Shift it adds
- *   or removes that object; with Alt it takes the object below the selected one there, and so on down, then
- *   from the top again. Dragged from empty space, it draws a rectangle: from left to right it takes the
+ *   or removes that object; with Ctrl it takes the object below the selected one there, and so on down, then
+ *   from the top again. With Alt it goes one level down into the group under the pointer, and with Shift + Alt one
+ *   level up: the part it reaches is selected, every gesture then applies to it, and its groups stay whole.
+ *   Dragged from empty space, it draws a rectangle: from left to right it takes the
  *   objects entirely inside it, from right to left those it touches, at every depth. Pressed on an object, it
  *   holds the selection: dragging moves it, and the wheel carries it in depth (it stays as it looks on the screen
  *   while the view zooms, moves or turns);
@@ -314,7 +328,8 @@ export class Editor {
     readonly from: ReadonlySet<Item>;
     readonly sections: ReadonlySet<PlacedSection>;
     readonly frame: OrientedRectangle | null;
-  } = { from: new Set(), sections: new Set(), frame: null };
+    readonly parents: readonly OrientedRectangle[];
+  } = { from: new Set(), sections: new Set(), frame: null, parents: [] };
   /**
    * The selection being turned by the pointer, with the turning key and the primary button: around the exact
    * center of its frame, from the objects as they were when the button was pressed. `swept` is the angle the
@@ -324,9 +339,14 @@ export class Editor {
     readonly center: Point;
     readonly before: readonly Item[];
     readonly selected: readonly Item[];
+    readonly part: Part | null;
     swept: number;
     done: number;
   } | null = null;
+  /** The part of the selected object that is selected instead of the whole of it, if any. */
+  private _part: Part | null = null;
+  /** How many levels the object under the last press with Alt has, itself included. */
+  private levels = 1;
 
   constructor(viewport: Viewport) {
     this._viewport = viewport;
@@ -345,9 +365,19 @@ export class Editor {
     return this.finished;
   }
 
-  /** The selected objects: top-level objects of the drawing. */
+  /** The selected objects: top-level objects of the drawing. When a part is selected, its top-level object. */
   get selection(): ReadonlySet<Item> {
     return this._selection;
+  }
+
+  /** The part selected inside the selected object, if any. */
+  get selectedPart(): Part | null {
+    return this._part;
+  }
+
+  /** How deep the selection is in the object under the last press with Alt: level 1 is the whole object. */
+  get depth(): { readonly level: number; readonly levels: number } {
+    return { level: (this._part?.path.length ?? 0) + 1, levels: this.levels };
   }
 
   /**
@@ -367,6 +397,7 @@ export class Editor {
       strokes: current === undefined ? this.flat.strokes : [...this.flat.strokes, current],
       selectedSections: shape.sections,
       selectionFrame: shape.frame,
+      parentFrames: shape.parents,
       band: this.band,
       brushOutline: this.brushOutline,
     };
@@ -433,10 +464,23 @@ export class Editor {
     this.pointerInside = false;
   }
 
-  private shapeOfSelection(): { readonly sections: ReadonlySet<PlacedSection>; readonly frame: OrientedRectangle | null } {
+  private shapeOfSelection(): {
+    readonly sections: ReadonlySet<PlacedSection>;
+    readonly frame: OrientedRectangle | null;
+    readonly parents: readonly OrientedRectangle[];
+  } {
     if (this.selectionShape.from !== this._selection) {
+      const part = this._part;
       const items = [...this._selection];
-      this.selectionShape = { from: this._selection, sections: new Set(items.flatMap(placedSections)), frame: selectionFrame(items) };
+      this.selectionShape =
+        part === null
+          ? { from: this._selection, sections: new Set(items.flatMap(placedSections)), frame: selectionFrame(items), parents: [] }
+          : {
+              from: this._selection,
+              sections: new Set(placedSections(part.root).slice(part.start, part.end)),
+              frame: itemFrame(part.placed),
+              parents: part.parents.flatMap((parent) => itemFrame(parent) ?? []),
+            };
     }
     return this.selectionShape;
   }
@@ -505,7 +549,7 @@ export class Editor {
           return;
         }
         // the drawing key must be held before the press to draw: without it, the button selects
-        this.pressAt(p, modifiers.shift === true, modifiers.alt === true);
+        this.pressAt(p, modifiers);
         return;
       }
       this.recorder = new StrokeRecorder();
@@ -600,30 +644,47 @@ export class Editor {
    * The primary button was pressed at `p`, to select. On an object, the selection is settled at once and held, so
    * that a drag or the wheel can carry it; what is left for a release without a move is in `Press.onClick`.
    */
-  private pressAt(p: ScreenPoint, shift: boolean, alt: boolean): void {
+  private pressAt(p: ScreenPoint, modifiers: Modifiers): void {
+    const shift = modifiers.shift === true;
+    const ctrl = modifiers.ctrl === true;
     const hits = this.objectsAt(p);
-    let target: Item | undefined = hits[0];
-    if (alt && hits.length > 1) {
-      // below the deepest selected object here (the topmost one if none is), and from the top again after the bottom
-      let current = 0;
-      hits.forEach((item, index) => {
-        if (this._selection.has(item)) current = index;
-      });
-      target = hits[(current + 1) % hits.length];
-    }
+    const top = hits[0];
+    const under = top === undefined ? [] : (pathAt(top, this._camera, this._viewport, p, CLICK_TOLERANCE_PIXELS) ?? []);
+    const part = this._part;
+    const onPart = part !== null && part.root === top && startsWith(under, part.path);
+    let target = top;
     let onClick: Press["onClick"] = "nothing";
-    if (target !== undefined) {
-      if (shift) {
-        if (this._selection.has(target)) onClick = "removeTarget";
-        else this.select([...this._selection, target]);
-      } else if (alt || !this._selection.has(target)) {
-        this.select([target]);
-      } else {
-        onClick = "keepOnlyTarget";
+    this.levels = 1;
+    if (top !== undefined && modifiers.alt === true) {
+      const level = onPart ? part.path.length : 0;
+      this.levels = under.length + 1;
+      this.selectLevel(top, under, shift ? Math.max(0, level - 1) : Math.min(under.length, level + 1));
+    } else if (!onPart || shift || ctrl) {
+      if (part !== null) this.select(this._selection); // the whole object again
+      if (ctrl && hits.length > 1) {
+        // below the deepest selected object here (the topmost one if none is), and from the top again after the bottom
+        let current = 0;
+        hits.forEach((item, index) => {
+          if (this._selection.has(item)) current = index;
+        });
+        target = hits[(current + 1) % hits.length];
       }
+      if (target !== undefined) {
+        if (shift) {
+          if (this._selection.has(target)) onClick = "removeTarget";
+          else this.select([...this._selection, target]);
+        } else if (ctrl || !this._selection.has(target)) {
+          this.select([target]);
+        } else {
+          onClick = "keepOnlyTarget";
+        }
+      }
+    }
+    if (target !== undefined) {
       this.grab = {
         before: this.finished,
         selected: [...this._selection],
+        part: this._part,
         camera: this._camera,
         from: p,
         pointer: p,
@@ -652,9 +713,11 @@ export class Editor {
         ? { zLevel: -grab.levels, factor: 1 }
         : { zLevel: from.zLevel - to.zLevel, factor: (grab.sizeOnScreen * from.factor) / to.factor };
     const carrying = followingView(from, to, shift, zoom);
-    const carried = new Map(grab.selected.map((item) => [item, withTransform(item, composeTransforms(carrying, transformOf(item)))]));
-    this.setItems(grab.before.map((item) => carried.get(item) ?? item));
-    this.select(carried.values());
+    const { items, reselect } = this.changed(grab.before, grab.selected, grab.part, (item) =>
+      withTransform(item, composeTransforms(carrying, transformOf(item))),
+    );
+    this.setItems(items);
+    reselect();
   }
 
   /** The view changed: what is held stays as it looks on the screen. */
@@ -736,6 +799,7 @@ export class Editor {
       if (grab.active) {
         this.setItems(grab.before);
         this.select(grab.selected);
+        this._part = grab.part;
         this._camera = grab.camera;
       }
       return;
@@ -745,6 +809,7 @@ export class Editor {
       this.turningSelection = null;
       this.setItems(turning.before);
       this.select(turning.selected);
+      this._part = turning.part;
       return;
     }
     if (this.press?.dragging) {
@@ -763,6 +828,12 @@ export class Editor {
     this.interruptHold();
     const selected = this._selection;
     if (selected.size === 0) return 0;
+    const part = this._part;
+    if (part !== null) {
+      const left = replacedPart(part, null); // the groups left empty go with it
+      this.commit(this.finished.flatMap((item) => (item !== part.root ? [item] : left === null ? [] : [left])));
+      return 1;
+    }
     this.commit(this.finished.filter((item) => !selected.has(item)));
     return selected.size;
   }
@@ -793,7 +864,7 @@ export class Editor {
    * while drawing.
    */
   ungroupSelection(): number {
-    if (this.isBusy) return 0;
+    if (this.isBusy || this._part !== null) return 0;
     this.interruptHold();
     const selected = this._selection;
     const opened = new Map<Item, readonly Item[]>();
@@ -834,7 +905,7 @@ export class Editor {
   alignSelection(): number {
     if (this.selectionCenter() === null) return 0;
     const turns = new Map<Item, number>();
-    for (const item of this._selection) {
+    for (const item of this.targets()) {
       const seen = this.onScreen(item);
       const degrees = shortestAngle(uprightAngle(seen.mirror) - seen.angle);
       if (degrees !== 0) turns.set(item, this.worldTurn(degrees));
@@ -856,7 +927,7 @@ export class Editor {
   uprightSelection(): number {
     if (this.selectionCenter() === null) return 0;
     const changed = new Map<Item, Item>();
-    for (const item of this._selection) {
+    for (const item of this.targets()) {
       const frame = itemFrame(item);
       if (frame === null) continue;
       const center = rectangleCenter(frame);
@@ -901,28 +972,50 @@ export class Editor {
     return frame === null ? null : rectangleCenter(frame);
   }
 
-  /** Replaces each selected object by `change(object)`, as one action, and selects the results. */
-  private changeSelected(change: (item: Item) => Item): number {
-    const changed = new Map([...this._selection].map((item) => [item, change(item)]));
-    this.commit(this.finished.map((item) => changed.get(item) ?? item));
-    this.select(changed.values());
-    return changed.size;
+  /** What the gestures on the selection act on: the part if there is one, placed in the world; otherwise the selected objects. */
+  private targets(): readonly Item[] {
+    return this._part === null ? [...this._selection] : [this._part.placed];
   }
 
   /**
-   * Replaces each selected object by `change(object)`, as a part of one action with the changes of the same kind
-   * made just before, if nothing else happened since. Returns how many objects.
+   * `items` with `change` applied to `selected`, or to `part` if there is one (`change` is given it placed in the
+   * world, and its groups stay as they are); and how to select the result.
+   */
+  private changed(
+    items: readonly Item[],
+    selected: readonly Item[],
+    part: Part | null,
+    change: (item: Item) => Item,
+  ): { readonly items: readonly Item[]; readonly count: number; readonly reselect: () => void } {
+    if (part !== null) {
+      const root = replacedPart(part, change(part.placed)) as Item; // an object was given: something is left
+      return { items: items.map((item) => (item === part.root ? root : item)), count: 1, reselect: () => this.selectPart(root, part.path) };
+    }
+    const results = new Map(selected.map((item) => [item, change(item)]));
+    return { items: items.map((item) => results.get(item) ?? item), count: results.size, reselect: () => this.select(results.values()) };
+  }
+
+  /** Replaces what the selection acts on by `change(object)`, as one action, and selects the results. */
+  private changeSelected(change: (item: Item) => Item): number {
+    const { items, count, reselect } = this.changed(this.finished, [...this._selection], this._part, change);
+    this.commit(items);
+    reselect();
+    return count;
+  }
+
+  /**
+   * Replaces what the selection acts on by `change(object)`, as a part of one action with the changes of the same
+   * kind made just before, if nothing else happened since. Returns how many objects.
    */
   private changeSelectedInRun(kind: Run["kind"], change: (item: Item) => Item): number {
     const run = this.run;
     const goesOn = run !== null && run.kind === kind && run.selection === this._selection && run.items === this.finished;
-    const changed = new Map([...this._selection].map((item) => [item, change(item)]));
-    const items = this.finished.map((item) => changed.get(item) ?? item);
+    const { items, count, reselect } = this.changed(this.finished, [...this._selection], this._part, change);
     if (goesOn) this.setItems(items);
     else this.commit(items);
-    this.select(changed.values());
+    reselect();
     this.run = { kind, selection: this._selection, items: this.finished };
-    return changed.size;
+    return count;
   }
 
   /**
@@ -969,7 +1062,7 @@ export class Editor {
     if (this._selection.size === 0) return;
     const frame = this.shapeOfSelection().frame;
     if (frame === null) return;
-    this.turningSelection = { center: rectangleCenter(frame), before: this.finished, selected: [...this._selection], swept: 0, done: 0 };
+    this.turningSelection = { center: rectangleCenter(frame), before: this.finished, selected: [...this._selection], part: this._part, swept: 0, done: 0 };
   }
 
   /** As `turnByPointer`, around the center of the selection's frame; with `steps`, by steps of the angle turned. */
@@ -985,13 +1078,27 @@ export class Editor {
     if (done === turning.done) return;
     turning.done = done;
     // from the objects as they were, so that nothing adds up
-    const turned = new Map(turning.selected.map((item) => [item, turnedItem(item, turning.center, this.worldTurn(done))]));
-    this.setItems(turning.before.map((item) => turned.get(item) ?? item));
-    this.select(turned.values());
+    const { items, reselect } = this.changed(turning.before, turning.selected, turning.part, (item) =>
+      turnedItem(item, turning.center, this.worldTurn(done)),
+    );
+    this.setItems(items);
+    reselect();
   }
 
   private select(items: Iterable<Item>): void {
     this._selection = new Set(items);
+    this._part = null;
+  }
+
+  private selectPart(root: Item, path: readonly number[]): void {
+    this.select([root]);
+    this._part = partOf(root, path);
+  }
+
+  /** Selects the object `root` or, from level 1 on, the part that far along `path`. */
+  private selectLevel(root: Item, path: readonly number[], level: number): void {
+    if (level === 0) this.select([root]);
+    else this.selectPart(root, path.slice(0, level));
   }
 
   private report(): SelectionReport {

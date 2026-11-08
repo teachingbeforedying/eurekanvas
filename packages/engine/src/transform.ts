@@ -101,6 +101,18 @@ export function turnedAround(t: Transform, center: Point, degrees: number): Tran
   };
 }
 
+/** What undoes `t`: its pivot is where `t` puts its own pivot, and `M · R(−a) = R(a) · M`. */
+export function inverseTransform(t: Transform): Transform {
+  return createTransform({
+    origin: t.position,
+    position: t.origin,
+    zLevel: -t.zLevel,
+    factor: 1 / t.factor,
+    angle: t.mirror ? t.angle : -t.angle,
+    mirror: t.mirror,
+  });
+}
+
 /** `T`, then a move by the exact offset `(offset.x, offset.y)`. */
 export function movedBy(t: Transform, offset: Point): Transform {
   return { ...t, position: { x: add(t.position.x, offset.x), y: add(t.position.y, offset.y) } };

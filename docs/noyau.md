@@ -315,7 +315,7 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
   - Maj+G groupe la sélection (les groupes s'emboîtent), et Maj+B défait un niveau.
   - Un groupe tracé ne devient pas la sélection.
 - **Sélectionner.**
-  - Clic ; Maj+clic ajoute ou retire ; `Alt`+clic prend l'objet du dessous (comme Inkscape et CorelDRAW ; Illustrator fait la même chose avec Ctrl+clic).
+  - Clic ; Maj+clic ajoute ou retire ; `Alt`+clic prend l'objet du dessous (comme Inkscape et CorelDRAW ; Illustrator fait la même chose avec Ctrl+clic). Depuis le 2026-11-08, c'est Ctrl+clic, et Alt sert à l'altération.
   - `Échap` ou un clic dans le vide désélectionnent.
   - Le rectangle dépend du sens, comme dans AutoCAD : de gauche à droite, seulement ce qui est entièrement dedans ; de droite à gauche, tout ce qu'il touche. Il prend à toute profondeur.
 - **Affichage** : une autre couleur et un cadre pointillé, sans poignées. Précisé le 2026-10-31 :
@@ -336,7 +336,7 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 - **Déplacer et tenir, précisé le 2026-11-08** :
   - Un appui sur un objet hors de la sélection le prend seul. Sur un objet de la sélection, glisser déplace toute la sélection, et un clic sans bouger ne garde que cet objet.
   - Maj + appui sur un objet non sélectionné l'ajoute dès l'appui, et glisser déplace tout. Maj + clic sans bouger sur un objet sélectionné le retire.
-  - Alt + appui prend l'objet du dessous dès l'appui, et glisser le déplace seul.
+  - Ctrl + appui prend l'objet du dessous dès l'appui, et glisser le déplace seul (Alt à l'origine, voir « L'altération »).
   - Le déplacement commence au-delà de 4 px ; l'objet rattrape alors le pointeur et le suit exactement.
   - On attrape l'encre seulement : l'intérieur du cadre pointillé ne compte pas.
   - `Échap` pendant un glisser remet aussi la vue comme à l'appui. C'est la seule fois où annuler touche la vue : `Ctrl+Z` ne la touche jamais.
@@ -360,6 +360,22 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 4. copier, couper, coller, et `Ctrl+O` qui sélectionne.
 
 **Non prévu pour l'instant** : poignées, lasso, verrouillage, ordre d'affichage, aimantation à une grille.
+
+## L'altération : décisions (2026-11-08)
+
+Modifier une partie d'un groupe sans casser le groupe. Sébastien l'a demandée avant l'étape 4, après avoir appuyé sur Alt par réflexe pour déplacer une syllabe d'un prénom groupé.
+
+**Ce que faisait l'ancienne version** (`3DRoom+ic.html`, `programmashute.txt`, `still_shute.txt`) : « alt is for alteration ». Alt tenu : le groupe le plus proche de l'objet visé bougeait seul (`isAltering`, L47031) ; Maj+Alt, l'altération profonde : seulement l'objet sous le pointeur (`isDeepAltering`, L47028). Le reste du groupe ne bougeait pas, le groupe restait entier. Les notes parlaient aussi d'un bord d'une autre couleur (« soleSelecting »).
+
+**Décisions de Sébastien** :
+- **Alt = altération**, comme avant. L'objet du dessous passe à Ctrl + clic (comme Illustrator), Ctrl + Maj + clic pour l'ajouter.
+- **Un niveau par clic**. Sur un prénom (groupe de syllabes, chaque syllabe un groupe de traits), le premier Alt + clic prend tout de suite le premier niveau dedans (la syllabe), puisqu'un clic simple prend déjà l'objet entier. Le suivant descend d'un niveau (le trait). Tout en bas, on y reste. Maj + Alt + clic remonte d'un niveau. `Échap` désélectionne, comme d'habitude.
+- **La partie reste sélectionnée** une fois Alt relâché. Tous les gestes s'y appliquent : glisser, flèches, `R`+`H`/`G`, `F`+`H`/`V`, `R` + bouton gauche, `1` + molette, redresser, effacer. Un groupe vidé disparaît aussi. Chaque geste est une action à annuler. Une seule partie à la fois.
+- **Cadres emboîtés** : la partie en bleu avec son cadre pointillé bleu, chaque groupe parent avec un cadre gris pointillé plus discret, et un message bref (« level 2 of 3 »).
+
+**Mes choix, par cohérence** (à faire juger) :
+- Alt + appui puis glisser descend dès l'appui et déplace la partie. Un appui simple sur la partie sélectionnée la déplace ; un appui simple ailleurs reprend l'objet entier.
+- Maj+`B` ne fait rien sur une partie, et Maj+`G` non plus.
 
 ## L'épaisseur du pinceau : décisions (2026-11-08)
 
@@ -600,6 +616,29 @@ Décisions dans « La sélection : décisions », aux paragraphes « précisé l
 **Mesure** : pour un trait de 4 000 points, une image pendant le déplacement prend 115 ms, dont 102 ms déjà présentes pour un dessin immobile (le tracé du contour). Traiter un mouvement du pointeur prend 0,1 ms. Le coût vient du dessin, pas du déplacement.
 
 **Contrôle par mutation** : 46 modifications volontaires, toutes tuées à la fin. Au premier passage, 8 survivaient, chacune signalant un cas absent des tests : un déplacement de vue de moins de 4 px, Alt sur un objet déjà sélectionné, l'arrondi du niveau vers 1,73, l'emplacement exact autour du pointeur avec Maj, `Ctrl+A` avec un autre objet présent, un trait tracé au milieu d'une suite de flèches, et `0` en tenant.
+
+## L'altération : livraison (2026-11-08)
+
+Décisions dans « L'altération : décisions ». Le format ne change pas : les groupes emboîtés et leurs transformations existaient déjà.
+
+- **Une partie** (`packages/engine/src/part.ts`) : un objet dans un groupe, désigné par les indices qui y mènent depuis l'objet du premier niveau.
+  - `partOf` la place dans le monde en composant les transformations de ses groupes (`placed`), et donne les groupes autour d'elle (`parents`) et ses sections dans l'objet entier.
+  - `replacedPart` remet un objet donné dans le monde à sa place dans les groupes, en composant avec l'inverse de leurs transformations. Sans transformation autour, rien n'est calculé. Avec `null`, la partie est retirée, et les groupes vidés avec elle.
+  - `pathAt` trouve le trait du dessus sous un point, à l'intérieur d'un objet.
+  - `inverseTransform` (`transform.ts`) défait une similitude : `M · R(−a) = R(a) · M`. Exacte pour les quarts de tour et les puissances de 2.
+- **Éditeur** : la sélection reste l'ensemble des objets du premier niveau. Une partie sélectionnée ajoute `_part`, et son objet est alors le seul sélectionné.
+  - Tous les gestes passent par `changed` : avec une partie, le changement reçoit l'objet placé dans le monde, exactement comme pour un objet du premier niveau, et le résultat est remis à sa place. Les gestes eux-mêmes n'ont pas changé.
+  - Une partie sélectionnée ne survit pas à un `Ctrl+Z` qui remplace son objet : la sélection ne garde que ce qui est encore là.
+- **Rendu** : `Scene.parentFrames`, un cadre gris pointillé par groupe parent, dessiné sous le cadre bleu de la partie.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements synthétiques passant par `main.ts`) :
+- un prénom de 3 syllabes : Alt + clic prend la syllabe (« level 2 of 3 »), le suivant le trait (« level 3 of 3 »), le suivant y reste ; Maj + Alt + clic remonte, jusqu'à l'objet entier ;
+- cadres emboîtés : gris pour le prénom, bleu pour la syllabe (capture) ;
+- Alt + glisser déplace la syllabe seule, les autres restent identiques, le groupe reste entier ;
+- Alt relâché : Maj + flèche, `R`+`H` ; trois `Ctrl+Z` remettent tout ;
+- `Suppr` sur un trait ; Ctrl + clic prend l'objet entier ; aucune erreur.
+
+**Contrôle par mutation** : 46 modifications volontaires, toutes tuées à la fin. Au premier passage, une survivait : rien ne distinguait une partie d'un autre objet ayant le même chemin. Un test le couvre maintenant.
 
 ## L'épaisseur du pinceau : livraison (2026-11-08)
 

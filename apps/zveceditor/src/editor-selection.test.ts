@@ -83,23 +83,23 @@ describe("a click", () => {
     expect(selected(editor)).toEqual([b]);
   });
 
-  it("with Alt takes the object below, then further down, then the top again", () => {
+  it("with Ctrl takes the object below, then further down, then the top again", () => {
     const editor = new Editor(viewport);
     // three different strokes (so that `toEqual` tells them apart) that all go through `here`
     const [a, b, c] = [drawObject(editor, 100, 100), drawObject(editor, 95, 100), drawObject(editor, 90, 100)];
     const here = { x: 125, y: 100 };
-    click(editor, here, { alt: true }); // nothing selected: the one below the topmost
+    click(editor, here, { ctrl: true }); // nothing selected: the one below the topmost
     expect(selected(editor)).toEqual([b]);
     click(editor, here);
     expect(selected(editor)).toEqual([c]);
-    click(editor, here, { alt: true });
+    click(editor, here, { ctrl: true });
     expect(selected(editor)).toEqual([b]);
-    click(editor, here, { alt: true });
+    click(editor, here, { ctrl: true });
     expect(selected(editor)).toEqual([a]);
-    click(editor, here, { alt: true });
+    click(editor, here, { ctrl: true });
     expect(selected(editor)).toEqual([c]);
-    click(editor, here, { alt: true, shift: true }); // and with Shift, adds the one below
-    click(editor, here, { alt: true, shift: true });
+    click(editor, here, { ctrl: true, shift: true }); // and with Shift, adds the one below
+    click(editor, here, { ctrl: true, shift: true });
     expect(selected(editor)).toEqual([c, b, a]);
   });
 

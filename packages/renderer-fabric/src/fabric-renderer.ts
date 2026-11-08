@@ -36,6 +36,12 @@ const FRAME_PADDING = 4;
 /** How far beyond the screen, in pixels, a side of the frame or of the rectangle is drawn at most. */
 const OFF_SCREEN_MARGIN = 10;
 
+/** Colour of the frames of the groups around a selected part. */
+const PARENT_FRAME_COLOR = "#999999";
+
+/** What the frames, the rectangle and the circle share. */
+const OVERLAY = { originX: "left", originY: "top", strokeWidth: 1, objectCaching: false, selectable: false, evented: false } as const;
+
 /** Colour of the circle that shows the brush: visible on the white page as on a black stroke. */
 const BRUSH_OUTLINE_COLOR = "#888888";
 
@@ -85,6 +91,8 @@ export class FabricRenderer implements Renderer {
   private readonly frame: Rect;
   private readonly band: Rect;
   private readonly brushOutline: Circle;
+  /** One frame per level of groups around a selected part, made when first needed. */
+  private readonly parentFrames: Rect[] = [];
   private shown: FabricObject[] = [];
   private drawn = 0;
 
@@ -99,10 +107,9 @@ export class FabricRenderer implements Renderer {
       backgroundColor: options.background ?? "#ffffff",
       renderOnAddRemove: false,
     });
-    const box = { originX: "left", originY: "top", strokeWidth: 1, objectCaching: false, selectable: false, evented: false } as const;
-    this.frame = new Rect({ ...box, fill: "", stroke: this.selectionColor, strokeDashArray: DASHES });
-    this.band = new Rect({ ...box });
-    this.brushOutline = new Circle({ ...box, originX: "center", originY: "center", fill: "", stroke: BRUSH_OUTLINE_COLOR });
+    this.frame = new Rect({ ...OVERLAY, fill: "", stroke: this.selectionColor, strokeDashArray: DASHES });
+    this.band = new Rect({ ...OVERLAY });
+    this.brushOutline = new Circle({ ...OVERLAY, originX: "center", originY: "center", fill: "", stroke: BRUSH_OUTLINE_COLOR });
   }
 
   /** How many sections the last `render` call drew. */
@@ -126,6 +133,10 @@ export class FabricRenderer implements Renderer {
     });
     this.drawn = next.length;
 
+    (scene.parentFrames ?? []).forEach((parent, level) => {
+      const rect = (this.parentFrames[level] ??= new Rect({ ...OVERLAY, fill: "", stroke: PARENT_FRAME_COLOR, strokeDashArray: DASHES }));
+      if (placeFrame(rect, rectangleOnScreen(scene.camera, scene.viewport, parent), scene.viewport)) next.push(rect);
+    });
     if (scene.selectionFrame) {
       // the frame follows the axes of the drawing, or of the selected object: it turns with them
       const frame = rectangleOnScreen(scene.camera, scene.viewport, scene.selectionFrame);

@@ -28,6 +28,8 @@ export interface Scene {
   readonly selectedSections?: ReadonlySet<PlacedSection>;
   /** The exact frame around the selection, drawn dashed; `null` with nothing selected. */
   readonly selectionFrame?: OrientedRectangle | null;
+  /** When the selection is a part of a group: the frames of the groups around it, drawn more discreetly. */
+  readonly parentFrames?: readonly OrientedRectangle[];
   /** The rectangle being dragged to select, if any. */
   readonly band?: SelectionBand | null;
   /** The brush around the pointer, on the screen, if it is shown. */

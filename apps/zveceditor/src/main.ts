@@ -241,7 +241,8 @@ function updateHud(): void {
     `automatic save in this browser: ${autosave}`,
     ``,
     `draw: hold ² (the key left of 1), then the left button; the strokes drawn while ² stays held make one object`,
-    `select: left button (Shift: add or remove, Alt: the object below)    deselect: Escape or a click on empty space`,
+    `select: left button (Shift: add or remove, Ctrl: the object below)    deselect: Escape or a click on empty space`,
+    `alter a part of a group without breaking it: Alt + click goes one level down, Shift + Alt + click one level up; then move, turn, scale or delete it`,
     `move: drag an object, or the arrows (Shift: 10 pixels; nothing selected: the view)    Escape while dragging: everything back    the wheel while holding carries it in depth (Shift: by powers of 2)`,
     `change the scale of the selection: hold 1 and turn the wheel (Shift: by 2)`,
     `rectangle: drag from empty space; left to right takes what is inside, right to left what it touches`,
@@ -285,7 +286,8 @@ canvas.addEventListener("pointerdown", (event) => {
   } catch {
     // drawing still works without the capture
   }
-  syncButtons(event.buttons, position(event), event.timeStamp, { shift: event.shiftKey, alt: event.altKey });
+  syncButtons(event.buttons, position(event), event.timeStamp, { shift: event.shiftKey, alt: event.altKey, ctrl: event.ctrlKey || event.metaKey });
+  if (event.altKey && editor.selection.size > 0 && editor.depth.levels > 1) showMessage(`level ${editor.depth.level} of ${editor.depth.levels}`);
   invalidate();
 });
 
@@ -374,7 +376,7 @@ window.addEventListener("keydown", (event) => {
     changed(); // a selection being turned is put back
     invalidate();
   } else if (event.key === "Alt") {
-    event.preventDefault(); // Alt+click takes the object below: Alt must not open the menu bar (Firefox) or focus the browser menu
+    event.preventDefault(); // Alt+click goes into a group: Alt must not open the menu bar (Firefox) or focus the browser menu
   } else if (!ctrl && !event.shiftKey && event.key.toLowerCase() === "b") {
     if (!event.repeat) {
       editor.setWidthKeyHeld(true);

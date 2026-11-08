@@ -24,6 +24,8 @@ at any zoom depth, objects, z-index, save and load.
   the object, then an exact position; and what keeps a held object as it looks on the screen when the view changes.
 - `src/placement.ts`: the sections of an object where its transforms put them, and their projection to the
   screen.
+- `src/part.ts`: a part of an object (an object inside a group): where it is in the world, how to change or
+  remove it without breaking its groups, and which one is under a point of the screen.
 - `src/render.ts`: the `Renderer` interface a drawing library implements, the `Scene` it draws (selection
   included), and `selectDrawableSections`, which chooses what is worth drawing for a camera.
 - `src/hit.ts`: the objects under a point of the screen (what is drawn there), and the objects in a rectangle
