@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { type Point, type Viewport, createCamera } from "./camera";
 import { fromNumber } from "./dyadic";
 import { placedAlone, projectSection } from "./placement";
-import { type SelectionOptions, DEFAULT_MAX_LEVEL_GAP, selectDrawableSections } from "./render";
+import { type SelectionOptions, selectDrawableSections } from "./render";
 import { type Stroke, StrokeRecorder, pointWorld } from "./stroke";
 import type { Camera } from "./camera";
 import { at } from "./test-utils";
@@ -57,31 +57,49 @@ describe("selectDrawableSections", () => {
     expect(select([small], camera, viewport)).toHaveLength(1);
   });
 
-  it("stops drawing a section when the camera is too many levels deeper than it", () => {
+  it("draws a section however deep the camera is, unless asked for a limit", () => {
     const section = at(stroke([[0, 0], [10, 0]]).sections, 0);
     const wide: Stroke = { sections: [section] };
     const centre = pointWorld(section, 0);
     const atGap = (gap: number) => createCamera({ center: centre, zLevel: gap });
-    const anyReach = { maxReachPixels: Infinity }; // this test is about the level gap only
-    expect(select([wide], atGap(DEFAULT_MAX_LEVEL_GAP), viewport, anyReach)).toHaveLength(1);
-    expect(select([wide], atGap(DEFAULT_MAX_LEVEL_GAP + 1), viewport, anyReach)).toEqual([]);
-    expect(select([wide], atGap(DEFAULT_MAX_LEVEL_GAP + 1), viewport, { ...anyReach, maxLevelGap: 30 })).toHaveLength(1);
-    expect(select([wide], atGap(10), viewport, { ...anyReach, maxLevelGap: 5 })).toEqual([]);
+    for (const gap of [24, 25, 100, 1100, 5000]) expect(select([wide], atGap(gap), viewport)).toHaveLength(1);
+    expect(select([wide], atGap(10), viewport, { maxLevelGap: 5 })).toEqual([]);
+    expect(select([wide], atGap(5), viewport, { maxLevelGap: 5 })).toHaveLength(1);
+    expect(select([wide], atGap(30), viewport, { maxLevelGap: 5 })).toEqual([]); // a limit holds for far sections too
   });
 
-  it("leaves out a section that reaches too far from where it is placed for the canvas to draw it precisely", () => {
+  it("gives its ink cut to the screen for a section that reaches too far for the canvas, and a projection otherwise", () => {
     // 1000 local units long: seen 14 levels deeper it reaches 1000 * 2^14 = 16 million pixels
     const long = stroke([[0, 0], [1000, 0]]);
     const centre = pointWorld(at(long.sections, 0), 1);
     const at14 = createCamera({ center: centre, zLevel: 14 });
     const at6 = createCamera({ center: centre, zLevel: 6 });
-    expect(select([long], at14, viewport)).toEqual([]);
-    expect(select([long], at6, viewport)).toHaveLength(1); // 64 thousand pixels
-    expect(select([long], at14, viewport, { maxReachPixels: 1e9 })).toHaveLength(1);
-    // a short section can be seen from deeper: 10 local units at 18 levels is 2.6 million pixels
+    const far = at(select([long], at14, viewport), 0);
+    expect(far.projection).toBeNull();
+    expect(far.outline?.length).toBeGreaterThan(0);
+    const near = at(select([long], at6, viewport), 0); // 64 thousand pixels
+    expect(near.outline).toBeNull();
+    expect(near.projection).not.toBeNull();
+    expect(at(select([long], at14, viewport, { maxReachPixels: 1e9 }), 0).projection).not.toBeNull();
+    // a short section keeps its projection from deeper: 10 local units at 18 levels is 2.6 million pixels
     const short = stroke([[0, 0], [10, 0]]);
     const shortCentre = pointWorld(at(short.sections, 0), 1);
-    expect(select([short], createCamera({ center: shortCentre, zLevel: 18 }), viewport)).toHaveLength(1);
+    expect(at(select([short], createCamera({ center: shortCentre, zLevel: 18 }), viewport), 0).projection).not.toBeNull();
+    // and what is not on the screen is left out on both routes
+    expect(select([long], createCamera({ center: pt(0, 5000), zLevel: 14 }), viewport)).toEqual([]);
+    expect(select([long], createCamera({ center: pt(0, 5000), zLevel: 6 }), viewport)).toEqual([]);
+  });
+
+  it("says when a section is a background: its ink as thick as the shorter side of the screen", () => {
+    // 2 units thick: 720 pixels, the height of the screen, needs a scale of 360
+    const line = stroke([[-10, 0], [10, 0]], 0, 2);
+    const background = (camera: Camera) => at(select([line], camera, viewport), 0).background;
+    expect(background(createCamera({ zLevel: 8, factor: 1.40625 }))).toBe(true); // exactly 720
+    expect(background(createCamera({ zLevel: 8, factor: 1.4 }))).toBe(false);
+    expect(background(createCamera({ zLevel: 30 }))).toBe(true);
+    expect(background(camera)).toBe(false);
+    const square: Viewport = { width: 800, height: 2000 };
+    expect(at(select([line], createCamera({ zLevel: 8, factor: 1.5625 }), square), 0).background).toBe(true); // 800, the width
   });
 
   it("finds what a turned view brings onto the screen", () => {
@@ -95,9 +113,8 @@ describe("selectDrawableSections", () => {
     expect(select([speck], createCamera({ angle: 45 }), viewport)).toHaveLength(1);
   });
 
-  it("leaves out sections that cannot be placed, instead of failing", () => {
+  it("leaves out a section too small to be placed, instead of failing", () => {
     const far = stroke([[0, 0], [10, 0]]);
-    expect(select([far], createCamera({ zLevel: 1100 }), viewport, { maxLevelGap: 5000 })).toEqual([]);
     expect(select([far], createCamera({ zLevel: -1100 }), viewport)).toEqual([]);
   });
 

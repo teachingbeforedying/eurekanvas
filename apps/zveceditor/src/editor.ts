@@ -22,6 +22,7 @@ import {
   createTransform,
   followingView,
   insertedIn,
+  isBackground,
   isGroup,
   itemBounds,
   itemFrame,
@@ -515,6 +516,11 @@ export class Editor {
     return this.recorder !== null;
   }
 
+  /** The view, to tell what is a background in it. */
+  private get view(): { readonly camera: Camera; readonly viewport: Viewport } {
+    return { camera: this._camera, viewport: this._viewport };
+  }
+
   /** A stroke, or a gesture on the selection, is under way: the objects must not change meanwhile. */
   private get isBusy(): boolean {
     return this.isDrawing || this.grab !== null || this.turningSelection !== null;
@@ -762,7 +768,7 @@ export class Editor {
     const end = screenToWorld(this._camera, this._viewport, this.last);
     // its sides follow the screen, so they follow the view when it is turned
     const rectangle = screenRectangle(this._camera, press.start, end);
-    const taken = itemsInRectangle(this.finished, rectangle, rectangleMode(from, this.last));
+    const taken = itemsInRectangle(this.finished, rectangle, rectangleMode(from, this.last), this.view);
     const items = taken.map((index) => this.finished[index] as Item);
     this.select(press.shift ? [...this._selection, ...items] : items);
     return this.report();
@@ -773,7 +779,7 @@ export class Editor {
    * one by one, leave the selection when they become their object.
    */
   selectAll(): SelectionReport {
-    if (this.grab === null) this.select(this.finished);
+    if (this.grab === null) this.select(this.finished.filter((item) => !isBackground(item, this.view)));
     return this.report();
   }
 
@@ -789,7 +795,7 @@ export class Editor {
       screenToWorld(this._camera, this._viewport, { x: 0, y: 0 }),
       screenToWorld(this._camera, this._viewport, corner),
     );
-    this.select(itemsInRectangle(this.finished, screen, "touching").map((index) => this.finished[index] as Item));
+    this.select(itemsInRectangle(this.finished, screen, "touching", this.view).map((index) => this.finished[index] as Item));
     return this.report();
   }
 

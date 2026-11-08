@@ -36,6 +36,10 @@ const FRAME_PADDING = 4;
 /** How far beyond the screen, in pixels, a side of the frame or of the rectangle is drawn at most. */
 const OFF_SCREEN_MARGIN = 10;
 
+/** The frame that says a background is on the screen: width of its band, in pixels, and colour, seen on black as on white. */
+const BACKGROUND_BAND = 8;
+const BACKGROUND_FRAME_COLOR = "#888888";
+
 /** Colour of the frames of the groups around a selected part. */
 const PARENT_FRAME_COLOR = "#999999";
 
@@ -93,6 +97,8 @@ export class FabricRenderer implements Renderer {
   private readonly brushOutline: Circle;
   /** One frame per level of groups around a selected part, made when first needed. */
   private readonly parentFrames: Rect[] = [];
+  /** The hatched band around the screen, for the size it was made for. */
+  private backgroundFrame: { readonly width: number; readonly height: number; readonly path: Path } | null = null;
   private shown: FabricObject[] = [];
   private drawn = 0;
 
@@ -125,9 +131,9 @@ export class FabricRenderer implements Renderer {
     const options = this.maxLevelGap === undefined ? {} : { maxLevelGap: this.maxLevelGap };
     const drawable = selectDrawableSections(scene.sections, scene.camera, scene.viewport, options);
     const selected = scene.selectedSections;
-    const next: FabricObject[] = drawable.map(({ placed, projection }) => {
-      const path = this.pathFor(placed);
-      place(path, projection);
+    const next: FabricObject[] = drawable.map(({ placed, projection, outline }) => {
+      const path = outline === null ? this.pathFor(placed) : this.pathOf(outline);
+      place(path, projection ?? ON_THE_SCREEN);
       path.set("fill", selected?.has(placed) ? this.selectionColor : this.color);
       return path;
     });
@@ -160,6 +166,8 @@ export class FabricRenderer implements Renderer {
       next.push(this.brushOutline);
     }
 
+    if (drawable.some((each) => each.background)) next.push(this.backgroundFrameFor(scene.viewport));
+
     if (this.shown.length > 0) this.canvas.remove(...this.shown);
     if (next.length > 0) this.canvas.add(...next);
     this.shown = next;
@@ -169,6 +177,36 @@ export class FabricRenderer implements Renderer {
   dispose(): void {
     this.shown = [];
     void this.canvas.dispose();
+  }
+
+  /** The band around the screen, hatched on the slant: it says that what covers the screen is a background. */
+  private backgroundFrameFor(viewport: Viewport): Path {
+    const { width, height } = viewport;
+    const known = this.backgroundFrame;
+    if (known !== null && known.width === width && known.height === height) return known.path;
+    const band = BACKGROUND_BAND;
+    const stripes: PathCommand[] = [];
+    const stripe = (points: readonly (readonly [number, number])[]): void => {
+      points.forEach(([x, y], i) => stripes.push({ type: i === 0 ? "M" : "L", x, y }));
+      stripes.push({ type: "Z" });
+    };
+    for (let x = -band; x < width; x += 2 * band) {
+      stripe([[x, band], [x + band, 0], [x + 2 * band, 0], [x + band, band]]);
+      stripe([[x, height], [x + band, height - band], [x + 2 * band, height - band], [x + band, height]]);
+    }
+    for (let y = band; y < height - band; y += 2 * band) {
+      stripe([[0, y + band], [band, y], [band, y + band], [0, y + 2 * band]]);
+      stripe([[width - band, y + band], [width, y], [width, y + band], [width - band, y + 2 * band]]);
+    }
+    const path = this.pathOf(stripes);
+    path.set("fill", BACKGROUND_FRAME_COLOR);
+    place(path, ON_THE_SCREEN);
+    this.backgroundFrame = { width, height, path };
+    return path;
+  }
+
+  private pathOf(commands: readonly PathCommand[]): Path {
+    return new Path(toPathData(commands), { fill: this.color, stroke: null, strokeWidth: 0, objectCaching: false, selectable: false, evented: false });
   }
 
   private pathFor(placed: PlacedSection): Path {
@@ -192,6 +230,9 @@ export class FabricRenderer implements Renderer {
     return path;
   }
 }
+
+/** What places a path given in the coordinates of the screen. */
+const ON_THE_SCREEN: SectionProjection = { origin: { x: 0, y: 0 }, scale: 1, turn: { cos: 1, sin: 0 }, mirror: false };
 
 /**
  * Places a section's path so that its local point `(x, y)` lands at `origin + R · M · (x, y) * scale`, `R` being

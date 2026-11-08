@@ -150,6 +150,36 @@ export function equals(a: Dyadic, b: Dyadic): boolean {
   return a.n === b.n && a.e === b.e;
 }
 
+/** How large a value is: `m` such that `2^(m-1) <= |d| < 2^m`, or `-Infinity` for zero. */
+export function magnitude(d: Dyadic): number {
+  return d.n === 0n ? -Infinity : bitLength(d.n < 0n ? -d.n : d.n) - d.e;
+}
+
+function integerSquareRoot(n: bigint): bigint {
+  if (n < 2n) return n;
+  let x = 1n << BigInt((bitLength(n) + 1) >> 1); // not below the root: Newton's method then only goes down
+  for (;;) {
+    const y = (x + n / x) >> 1n;
+    if (y >= x) return x;
+    x = y;
+  }
+}
+
+/** The square root of `d`, rounded down to a multiple of `2^-bits`. */
+export function squareRoot(d: Dyadic, bits: number): Dyadic {
+  if (d.n < 0n) throw new RangeError("cannot take the square root of a negative value");
+  const scale = 2 * bits - d.e;
+  return dyadic(integerSquareRoot(scale >= 0 ? d.n << BigInt(scale) : d.n >> BigInt(-scale)), bits);
+}
+
+/** `a / b` as a `number`, to its last bits, whatever the sizes of `a` and `b`. */
+export function quotient(a: Dyadic, b: Dyadic): number {
+  if (b.n === 0n) throw new RangeError("division by zero");
+  if (a.n === 0n) return 0;
+  const extra = 64 + Math.max(0, significantBits(b) - significantBits(a));
+  return toNumber(dyadic((a.n << BigInt(extra)) / b.n, extra - b.e + a.e));
+}
+
 /** Number of bits of the numerator: a measure of how precise (and how big in memory) a value is. */
 export function significantBits(d: Dyadic): number {
   return d.n === 0n ? 0 : bitLength(d.n < 0n ? -d.n : d.n);

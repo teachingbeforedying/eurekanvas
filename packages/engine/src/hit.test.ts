@@ -5,6 +5,7 @@ import { type Dyadic, add, fromNumber, shift } from "./dyadic";
 import {
   boundsFromCorners,
   boundsOf,
+  isBackground,
   itemBounds,
   itemsAt,
   itemsInRectangle,
@@ -277,5 +278,70 @@ describe("itemBounds", () => {
     const mirrored = createCamera({ angle: 90, mirror: true });
     const frame = { origin: ORIGIN, angle: 30, bounds: rect(0, 0, 10, 20) };
     expect(rectangleOnScreen(mirrored, viewport, frame)).toMatchObject({ width: 10, height: 20, angle: 120 });
+  });
+});
+
+describe("backgrounds", () => {
+  // 2 units thick. On a screen 720 pixels high, a scale of 256 shows it 512 pixels thick; 512 shows it 1024 pixels thick.
+  const line = stroke([[-100, 0], [100, 0]], 0, 2);
+  const at = (level: number, x = 0, factor = 1) => createCamera({ center: pt(x, 0), zLevel: level, factor });
+  const middle = { x: 640, y: 360 };
+
+  /** Thin from -100 to 0, then getting much thicker up to 100. */
+  const recorder = new StrokeRecorder();
+  for (const [x, width] of [[-100, 2], [0, 2], [100, 2000]] as const) recorder.addPoint(pt(x, 0), 0, width);
+  const mixed = recorder.stroke;
+
+  it("are not found under a point, from the thickness of the shorter side of the screen on", () => {
+    expect(itemsAt([line], at(8), viewport, middle)).toEqual([0]);
+    expect(itemsAt([line], at(9), viewport, middle)).toEqual([]);
+    expect(itemsAt([line], at(8, 0, 1.4), viewport, middle)).toEqual([0]); // 716.8 pixels
+    expect(itemsAt([line], at(8, 0, 1.40625), viewport, middle)).toEqual([]); // 720 pixels
+    const narrow: Viewport = { width: 500, height: 2000 };
+    expect(itemsAt([line], at(8), narrow, { x: 250, y: 1000 })).toEqual([]); // 512 is more than its width
+    const dot = stroke([[0, 0]], 0, 2);
+    expect(itemsAt([dot], at(8), viewport, middle)).toEqual([0]);
+    expect(itemsAt([dot], at(9), viewport, middle)).toEqual([]);
+  });
+
+  it("are judged where the pointer is: the thin part of a stroke is an object, its huge part is a background", () => {
+    expect(itemsAt([mixed], at(8, -50), viewport, middle)).toEqual([0]);
+    expect(itemsAt([mixed], at(8, 90), viewport, middle)).toEqual([]);
+  });
+
+  it("are not taken by a rectangle given the view", () => {
+    const area10 = area(-10, -10, 10, 10);
+    const view = { camera: at(9), viewport };
+    expect(itemsInRectangle([line], area10, "touching")).toEqual([0]);
+    expect(itemsInRectangle([line], area10, "touching", view)).toEqual([]);
+    expect(itemsInRectangle([line], area(-200, -200, 200, 200), "inside", view)).toEqual([]);
+    expect(itemsInRectangle([line], area(-200, -200, 200, 200), "touching", view)).toEqual([]);
+    expect(itemsInRectangle([line], area10, "touching", { camera: at(8), viewport })).toEqual([0]);
+  });
+
+  it("do not count in a rectangle, but the thin part of the same stroke does", () => {
+    const view = { camera: at(8), viewport };
+    expect(itemsInRectangle([mixed], area(-60, -10, -40, 10), "touching", view)).toEqual([0]);
+    expect(itemsInRectangle([mixed], area(80, -10, 95, 10), "touching", view)).toEqual([]);
+    expect(itemsInRectangle([mixed], area(-105, -5, 5, 5), "inside", view)).toEqual([0]); // the fat end does not count
+    expect(itemsInRectangle([mixed], area(-500, -3000, 500, 3000), "touching", view)).toEqual([0]); // whole, by its thin part
+    expect(itemsInRectangle([mixed], area(-105, -5, -90, 5), "inside", view)).toEqual([]); // its thin part is not all inside
+  });
+
+  it("count the scale of the object", () => {
+    const larger = withTransform(line, createTransform({ origin: pt(0, 0), factor: 1.5 }));
+    expect(itemsAt([larger], at(7), viewport, middle)).toEqual([0]); // 384 pixels
+    expect(itemsAt([larger], at(8), viewport, middle)).toEqual([]); // 768 pixels, and 512 without its scale
+    expect(isBackground(larger, { camera: at(8), viewport })).toBe(true);
+  });
+
+  it("tell whether all the ink of an object is one", () => {
+    const view = (level: number) => ({ camera: at(level), viewport });
+    expect(isBackground(line, view(8))).toBe(false);
+    expect(isBackground(line, view(9))).toBe(true);
+    expect(isBackground(mixed, view(8))).toBe(false);
+    expect(isBackground({ sections: [] }, view(9))).toBe(false);
+    expect(isBackground({ items: [line, stroke([[0, 0], [1, 0]], 0, 0.01)] }, view(9))).toBe(false); // the thin stroke is an object
+    expect(isBackground({ items: [line, line] }, view(9))).toBe(true);
   });
 });

@@ -181,9 +181,9 @@ L'objectif de Sébastien est un moteur qui se comporte **comme l'ancien** quand 
 | 1 000 unités locales | 0,07 | −0,6 | −0,6 | −3,9 | −22,6 (trait absent de la colonne mesurée) |
 
    Avec 100 unités locales, l'erreur atteint −1,3 px à 20 niveaux, −97 px à 24, et rien n'est dessiné à 30 et 40. Ce n'est donc pas une limite en niveaux mais en **étendue en pixels** (distance de l'ancrage à l'extrémité, multipliée par l'échelle) : sous environ 6 millions de pixels l'erreur reste sous 0,1 px, vers 10 millions elle vaut 0,6 px. Le canvas du navigateur calcule en simple précision. `selectDrawableSections` applique donc `DEFAULT_MAX_REACH_PIXELS = 4e6`, plus `maxLevelGap = 24` comme dans l'ancien code.
-4. **Un essai de placement près de l'écran.** En posant l'objet fabric sur un point de la section proche de l'écran (au lieu de son ancrage), l'erreur reste au plancher de mesure jusqu'à 80 niveaux d'écart, pour des traits fins. Mais en vrai, un trait de 3 px dessiné à un niveau devient, vu 12 niveaux plus profond, une bande d'environ 12 000 px de large, dont les bords sont des arcs de très grand rayon : le même problème de précision revient pour ces bords. Il faudrait calculer le contour en double précision et le découper au cadre de l'écran avant de le donner au canvas. **Non fait**, hors du périmètre de cette étape.
+4. **Un essai de placement près de l'écran.** En posant l'objet fabric sur un point de la section proche de l'écran (au lieu de son ancrage), l'erreur reste au plancher de mesure jusqu'à 80 niveaux d'écart, pour des traits fins. Mais en vrai, un trait de 3 px dessiné à un niveau devient, vu 12 niveaux plus profond, une bande d'environ 12 000 px de large, dont les bords sont des arcs de très grand rayon : le même problème de précision revient pour ces bords. Il faudrait calculer le contour en double précision et le découper au cadre de l'écran avant de le donner au canvas. **Non fait** à cette étape (fait le 2026-11-08, voir « Voir un trait à tout niveau de zoom : livraison »).
 
-**Conséquence par rapport à l'ancienne version, à connaître.** L'ancien code dessinait les objets jusqu'à 24 niveaux plus grands que l'écran. Ici, une section de 100 unités locales n'est plus dessinée au-delà d'environ 14 niveaux de zoom avant, et une de 1 000 unités au-delà d'environ 12. Quand on zoome plus profondément dans un trait dessiné plus tôt, il disparaît (écran blanc), là où l'ancienne version l'aurait montré comme une grande masse noire. Quand on dessine en zoomant, ce n'est pas visible (les sections récentes sont proches du niveau courant), c'est quand on revient zoomer dans un dessin. À juger à l'usage.
+**Conséquence par rapport à l'ancienne version, à connaître.** L'ancien code dessinait les objets jusqu'à 24 niveaux plus grands que l'écran. Ici, une section de 100 unités locales n'est plus dessinée au-delà d'environ 14 niveaux de zoom avant, et une de 1 000 unités au-delà d'environ 12. Quand on zoome plus profondément dans un trait dessiné plus tôt, il disparaît (écran blanc), là où l'ancienne version l'aurait montré comme une grande masse noire. Quand on dessine en zoomant, ce n'est pas visible (les sections récentes sont proches du niveau courant), c'est quand on revient zoomer dans un dessin. À juger à l'usage. **Réglé le 2026-11-08** : un trait ne disparaît plus, à aucune profondeur.
 
 **Vérifié à l'usage** (page lancée dans le panneau Browser) :
 - un trait au vrai glisser de la souris : 1 trait, au bon endroit ;
@@ -360,6 +360,18 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 4. copier, couper, coller, et `Ctrl+O` qui sélectionne.
 
 **Non prévu pour l'instant** : poignées, lasso, verrouillage, ordre d'affichage, aimantation à une grille.
+
+## Voir un trait à tout niveau de zoom : décisions (2026-11-08)
+
+Sébastien veut voir un trait quel que soit le niveau de zoom à l'intérieur de celui-ci.
+
+**Décisions de Sébastien** :
+- **Pas de limite de profondeur** : un trait ne disparaît plus (avant : 12 à 14 niveaux ; 24 dans l'ancienne version).
+- **Un trait devient un fond quand il est plus épais que l'écran** : là où on vise, son épaisseur à l'écran atteint le plus petit côté de la fenêtre. On ne peut alors plus voir ses deux bords à la fois. Sur un écran de 720 px de haut : environ 8 niveaux pour un trait de 3 px, 4,6 pour 30 px, 2,5 pour 128 px. Sur un trait tracé en zoomant, la partie fine reste un objet et la partie énorme est un fond.
+- **Un fond ne se prend pas** : ni au clic, ni au rectangle, ni par `Ctrl+A`, ni par `Espace` + `Ctrl+A`. Pour le prendre, on dézoome.
+- **Un cadre le signale** (son idée) : une bande de 8 px sur les quatre bords de l'écran, hachurée en biais, en gris, dès qu'un fond touche l'écran. Un seul cadre, quel que soit le nombre de fonds.
+
+**Conséquence** : un trait noir tracé sur un fond noir ne se voit pas, tant que la couleur n'existe pas.
 
 ## Copier, couper, coller : décisions (2026-11-08)
 
@@ -700,6 +712,38 @@ Décisions dans « L'épaisseur du pinceau : décisions ».
 - Maj+`B` en répétition ne dégroupe pas ; aucune erreur.
 
 **Contrôle par mutation** : 46 modifications volontaires, toutes tuées à la fin sauf une, équivalente (`>=` ou `>` à la fin du lissage : même résultat). Au premier passage, d'autres survivaient : une perte de focus pendant un trait aurait lancé l'élastique, un cran nul relançait le lissage, et rien ne fixait le maximum : les tests les couvrent. Une dernière a montré une ligne inutile, retirée.
+
+## Voir un trait à tout niveau de zoom : livraison (2026-11-08)
+
+Décisions dans « Voir un trait à tout niveau de zoom : décisions ». Le format ne change pas.
+
+- **L'idée** : celle d'un pixel parfait. Calculer exactement, ne garder que ce qui touche l'écran, et ne convertir en nombre ordinaire qu'à la fin. Vu de l'intérieur, l'écran ne voit jamais le trait entier. Pour chaque capsule, il est entièrement dehors, entièrement dedans, ou un bord le traverse, et ce bord est une droite ou un arc de grand rayon.
+- **Deux routes** (`selectDrawableSections`) : une section qui s'étend à moins de 4 millions de pixels garde le rendu d'avant (`Path` en cache, `projection`), donc le zoom et le tracé courants ne changent pas. Au-delà, elle passe par `farOutline`, qui donne un contour en coordonnées d'écran (`outline`), refait à chaque image.
+- **`packages/engine/src/far.ts`** :
+  - Une distance signée en flottants, dans les unités locales de la section, décide des deux premiers cas : dehors on passe, dedans de façon certaine la section vaut tout l'écran. La marge est la demi-diagonale de l'écran dans ces unités.
+  - Pour un bord, les normales sont en flottants. La distance en pixels du milieu de l'écran au bord, différence de deux nombres immenses, se calcule en dyadiques, puis tient dans un flottant. Les deux tangentes d'une capsule effilée utilisent la racine de `d² − (r₁ − r₂)²`, prise avec assez de bits pour que le résultat soit juste au pixel. Le coût est d'environ un bit par niveau.
+  - Un arc de rayon sous 1e7 px s'échantillonne en flottants, là où il peut toucher l'écran. Au-delà, il est droit à l'écran : une seule tangente exacte, dans la direction du milieu de l'écran.
+  - Le rectangle de l'écran (+2 px) est coupé par ces demi-plans. Tous les contours tournent dans le même sens : le remplissage non-zero donne l'union, comme `strokeOutline`.
+- **`dyadic.ts`** : `magnitude`, `squareRoot` (arrondie vers le bas au nombre de bits demandé) et `quotient` (le quotient de deux dyadiques, en flottant, quelles que soient leurs tailles).
+- **`placement.ts`** : `sectionExtent` (venu de `render.ts`, avec l'épaisseur minimale), `sectionScale` et `backgroundWidth` (le plus petit côté de la fenêtre, en unités locales).
+- **Fonds** :
+  - `DrawableSection.background` dit qu'une section dessinée a de l'encre au moins aussi épaisse que `backgroundWidth`.
+  - `itemsAt` ignore cette encre, segment par segment : sur un trait tracé en zoomant, la partie fine reste prenable.
+  - `itemsInRectangle` reçoit `BackgroundView` : une section entièrement fond ne compte pas, et l'encre trop épaisse d'une section mixte non plus.
+  - `isBackground` (toutes les sections sont des fonds) écarte l'objet de `Ctrl+A`.
+- **Cadre** : `backgroundFrameFor` (`fabric-renderer.ts`), un `Path` de bandes hachurées gardé tant que la fenêtre garde sa taille, dessiné au-dessus du reste.
+
+**À savoir** : zoomer autour du pointeur multiplie par 2 à chaque niveau l'écart entre le pointeur et un bord. Un écart d'un demi-pixel vaut 500 000 px à 20 niveaux. On se retrouve donc vite tout dedans (écran noir, cadre) ou tout dehors (écran blanc). Le bord reste juste, c'est la visée qui ne peut pas suivre.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, pixels lus dans le canvas) :
+- un trait de 3 px, la vue posée en position exacte 100 px sous son bord bas, à 20, 60, 100, 300 et 1000 niveaux : dernier pixel noir à y = 283, premier blanc à 284, comme calculé ;
+- son bout rond, 50 px à droite du milieu de l'écran, aux mêmes niveaux : dernier noir à x = 561, premier blanc à 562 ;
+- le zoom à la molette jusqu'à 1000 niveaux, aucune erreur ;
+- le cadre (3 px, fenêtre de 768 px de haut, donc une échelle de 256) : absent aux niveaux 5, 7 × 1,99 et 8 × 0,99, présent à 8 × 1 et 9, sur les quatre côtés, et absent au niveau 0 ;
+- au niveau 9, ni le clic, ni le rectangle, ni `Ctrl+A` ne prennent le trait ; au niveau 5, un clic le prend ;
+- le temps d'une image avec 300 traits de 80 points dont le bord traverse l'écran : 14 à 25 ms de 13 à 1000 niveaux, contre 38 ms au niveau 0 par la route habituelle.
+
+**Contrôle par mutation** : 70 modifications volontaires, 68 tuées. Les 2 qui survivent sont équivalentes : le rejet par la boîte de la section et le saut des capsules lointaines ne font que gagner du temps, le résultat est le même sans eux. Au premier passage, 22 survivaient. Certaines ont montré du code inutile, retiré : l'échantillonnage grossier des arcs, la condition sur l'écart de niveaux dans le choix de la route, deux tests dans `sectionTouches`, et les cas particuliers d'une division par zéro. Les autres ont montré des trous dans les tests : un objet transformé loin de son ancre, un disque contenu dans l'autre, les deux bouts d'une capsule effilée, une racine irrationnelle, le milieu d'une tangente, un arc doux, un coin d'écran, et l'échelle de l'objet pour un fond.
 
 ## Critères de réussite du tronçon
 

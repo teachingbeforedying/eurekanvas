@@ -74,6 +74,7 @@ export {
   samePlace,
 } from "./placement";
 export { type Part, insertedIn, partOf, pathAt, replacedPart } from "./part";
+export { farOutline } from "./far";
 export { type OutlinePoint, type PathCommand, strokeOutline } from "./outline";
 export {
   type DrawableSection,
@@ -81,12 +82,12 @@ export {
   type Scene,
   type SelectionBand,
   type SelectionOptions,
-  DEFAULT_MAX_LEVEL_GAP,
   DEFAULT_MAX_REACH_PIXELS,
   DEFAULT_MIN_PIXELS,
   selectDrawableSections,
 } from "./render";
 export {
+  type BackgroundView,
   type OrientedRectangle,
   type RectangleMode,
   type RectangleOnScreen,
@@ -94,6 +95,7 @@ export {
   type WorldBounds,
   boundsFromCorners,
   boundsOf,
+  isBackground,
   itemBounds,
   itemFrame,
   itemsAt,

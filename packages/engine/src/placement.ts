@@ -53,6 +53,54 @@ export function placeSection(section: Section, t: Transform): PlacedSection {
   };
 }
 
+/** The box of a section's points, in its local units, and its smallest and largest thickness. */
+export interface SectionExtent {
+  readonly minX: number;
+  readonly maxX: number;
+  readonly minY: number;
+  readonly maxY: number;
+  readonly minWidth: number;
+  readonly maxWidth: number;
+}
+
+// Sections are immutable, so their extent can be remembered for as long as the section object lives.
+const extents = new WeakMap<Section, SectionExtent>();
+
+export function sectionExtent(section: Section): SectionExtent {
+  const known = extents.get(section);
+  if (known !== undefined) return known;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minWidth = Infinity;
+  let maxWidth = 0;
+  for (const p of section.points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+    if (p.width < minWidth) minWidth = p.width;
+    if (p.width > maxWidth) maxWidth = p.width;
+  }
+  const extent = { minX, maxX, minY, maxY, minWidth, maxWidth };
+  extents.set(section, extent);
+  return extent;
+}
+
+/** How many pixels of the screen a local unit of a section is: `Infinity` very deep, 0 very far out. */
+export function sectionScale(placed: PlacedSection, camera: Camera): number {
+  return 2 ** (camera.zLevel - placed.zLevel) * camera.factor * placed.factor;
+}
+
+/**
+ * The thickness, in local units of a section, from which its ink is a background: as thick as the shorter side of the
+ * screen, so that both of its edges cannot be seen at once.
+ */
+export function backgroundWidth(placed: PlacedSection, camera: Camera, viewport: Viewport): number {
+  return Math.min(viewport.width, viewport.height) / sectionScale(placed, camera);
+}
+
 /** Whether two placed sections are the same stroke at exactly the same place: one would hide the other. */
 export function samePlace(a: PlacedSection, b: PlacedSection): boolean {
   const [ours, theirs] = [a.section.points, b.section.points];

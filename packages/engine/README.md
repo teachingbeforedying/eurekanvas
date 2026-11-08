@@ -28,8 +28,11 @@ at any zoom depth, objects, z-index, save and load.
   remove it without breaking its groups, and which one is under a point of the screen.
 - `src/render.ts`: the `Renderer` interface a drawing library implements, the `Scene` it draws (selection
   included), and `selectDrawableSections`, which chooses what is worth drawing for a camera.
+- `src/far.ts`: the outline on the screen of a section too large for a canvas, which computes in single
+  precision: its edges are exact at any depth and clipped to the screen.
 - `src/hit.ts`: the objects under a point of the screen (what is drawn there), and the objects in a rectangle
-  that may follow a turned or mirrored view, compared exactly at any depth.
+  that may follow a turned or mirrored view, compared exactly at any depth. Ink thicker than the screen is a
+  background: it cannot be taken.
 
 Design notes and measurements: [docs/noyau.md](../../docs/noyau.md).
 

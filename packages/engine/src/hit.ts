@@ -22,8 +22,8 @@ import {
 } from "./camera";
 import { type Item, withTransform } from "./drawing";
 import { type Dyadic, add, compare, fromNumber, mul, neg, shift, sub, toNumber } from "./dyadic";
-import { type PlacedSection, type SectionProjection, placedSections } from "./placement";
-import { type SelectionOptions, drawableProjection, sectionExtent } from "./render";
+import { type PlacedSection, type SectionProjection, backgroundWidth, placedSections, sectionExtent } from "./placement";
+import { type SelectionOptions, drawableProjection } from "./render";
 import type { LocalPoint } from "./stroke";
 import { turnedExactly } from "./transform";
 
@@ -69,12 +69,13 @@ function placedLocal(turn: Turn, mirror: boolean, p: { readonly x: number; reado
 /**
  * Whether the ink of a section comes within `tolerance` of the point `(qx, qy)`, all in the section's local
  * units. The thickness at a point of a segment is taken as the linear blend of the thicknesses of its ends,
- * which is what the tapered capsules of the outline draw, to within a sliver.
+ * which is what the tapered capsules of the outline draw, to within a sliver. Ink at least `limit` thick is a
+ * background: it does not count.
  */
-function nearInk(points: readonly LocalPoint[], qx: number, qy: number, tolerance: number): boolean {
+function nearInk(points: readonly LocalPoint[], qx: number, qy: number, tolerance: number, limit: number): boolean {
   const first = points[0];
   if (first === undefined) return false;
-  if (points.length === 1) return Math.hypot(qx - first.x, qy - first.y) <= first.width / 2 + tolerance;
+  if (points.length === 1) return first.width < limit && Math.hypot(qx - first.x, qy - first.y) <= first.width / 2 + tolerance;
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1] as LocalPoint;
     const b = points[i] as LocalPoint;
@@ -83,12 +84,12 @@ function nearInk(points: readonly LocalPoint[], qx: number, qy: number, toleranc
     const length2 = dx * dx + dy * dy;
     const t = length2 === 0 ? 0 : Math.min(1, Math.max(0, ((qx - a.x) * dx + (qy - a.y) * dy) / length2));
     const half = (a.width + (b.width - a.width) * t) / 2;
-    if (Math.hypot(qx - (a.x + dx * t), qy - (a.y + dy * t)) <= half + tolerance) return true;
+    if (2 * half < limit && Math.hypot(qx - (a.x + dx * t), qy - (a.y + dy * t)) <= half + tolerance) return true;
   }
   return false;
 }
 
-function sectionHit(placed: PlacedSection, projection: SectionProjection, p: ScreenPoint, tolerancePixels: number): boolean {
+function sectionHit(placed: PlacedSection, projection: SectionProjection, p: ScreenPoint, tolerancePixels: number, limit: number): boolean {
   const { origin, scale, turn, mirror } = projection;
   const back = unturned(turn, p.x - origin.x, p.y - origin.y);
   const qx = back.x / scale;
@@ -97,13 +98,13 @@ function sectionHit(placed: PlacedSection, projection: SectionProjection, p: Scr
   const extent = sectionExtent(placed.section);
   const reach = extent.maxWidth / 2 + tolerance;
   if (qx < extent.minX - reach || qx > extent.maxX + reach || qy < extent.minY - reach || qy > extent.maxY + reach) return false;
-  return nearInk(placed.section.points, qx, qy, tolerance);
+  return nearInk(placed.section.points, qx, qy, tolerance, limit);
 }
 
 /**
  * The objects drawn at `p` on the screen, or whose ink is at most `tolerance` pixels away, topmost first, as
  * indices into `items`. Only what is drawn counts: a section that `selectDrawableSections` leaves out (too
- * small, too far...) cannot be hit. A group is hit when one of its strokes is.
+ * small...) cannot be hit, and neither can ink that is a background there. A group is hit when one of its strokes is.
  */
 export function itemsAt(
   items: readonly Item[],
@@ -117,7 +118,7 @@ export function itemsAt(
   for (let index = items.length - 1; index >= 0; index--) {
     const hit = placedSections(items[index] as Item).some((placed) => {
       const projection = drawableProjection(placed, camera, viewport, options);
-      return projection !== null && sectionHit(placed, projection, p, tolerance);
+      return projection !== null && sectionHit(placed, projection, p, tolerance, backgroundWidth(placed, camera, viewport));
     });
     if (hit) hits.push(index);
   }
@@ -365,9 +366,10 @@ function localRectangle(placed: PlacedSection, rectangle: OrientedRectangle, tur
  * each segment is compared with the rectangle widened by half its thickness (as a square: near a corner of the
  * rectangle, up to 0.4 thickness too generous).
  */
-function sectionTouches(placed: PlacedSection, rectangle: OrientedRectangle, turn: Turn): boolean {
+function sectionTouches(placed: PlacedSection, rectangle: OrientedRectangle, turn: Turn, limit: number): boolean {
   const place = placeOf(placed, rectangle, turn);
-  if (place !== "crossing") return place === "inside";
+  if (place === "outside") return false;
+  if (place === "inside") return true;
   const box = localRectangle(placed, rectangle, turn);
   const along = turnOf(rectangle.angle + placed.angle);
   const points = placed.section.points.map((p) => ({ ...placedLocal(along, placed.mirror, p), width: p.width }));
@@ -377,13 +379,13 @@ function sectionTouches(placed: PlacedSection, rectangle: OrientedRectangle, tur
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1] as LocalPoint;
     const b = points[i] as LocalPoint;
-    if (segmentMeetsBox(a, b, widened(box, Math.max(a.width, b.width) / 2))) return true;
+    if (Math.max(a.width, b.width) < limit && segmentMeetsBox(a, b, widened(box, Math.max(a.width, b.width) / 2))) return true;
   }
   return false;
 }
 
 /** Whether the ink of a placed section is entirely inside a rectangle: each of its round ends is. */
-function sectionInside(placed: PlacedSection, rectangle: OrientedRectangle, turn: Turn): boolean {
+function sectionInside(placed: PlacedSection, rectangle: OrientedRectangle, turn: Turn, limit: number): boolean {
   const place = placeOf(placed, rectangle, turn);
   if (place !== "crossing") return place === "inside";
   const box = localRectangle(placed, rectangle, turn);
@@ -391,23 +393,37 @@ function sectionInside(placed: PlacedSection, rectangle: OrientedRectangle, turn
   return placed.section.points.every((p) => {
     const q = placedLocal(along, placed.mirror, p);
     const half = p.width / 2;
-    return q.x - half >= box.left && q.x + half <= box.right && q.y - half >= box.top && q.y + half <= box.bottom;
+    return p.width >= limit || q.x - half >= box.left && q.x + half <= box.right && q.y - half >= box.top && q.y + half <= box.bottom;
   });
 }
 
+/** What it takes to know where ink is a background: the view it is seen in. */
+export interface BackgroundView {
+  readonly camera: Camera;
+  readonly viewport: Viewport;
+}
+
+/** Whether all the ink of an object is a background in this view: there is nothing of it left to take. */
+export function isBackground(item: Item, view: BackgroundView): boolean {
+  const sections = placedSections(item);
+  return sections.length > 0 && sections.every((placed) => sectionExtent(placed.section).minWidth >= backgroundWidth(placed, view.camera, view.viewport));
+}
+
 /**
- * The objects that a rectangle takes (see `RectangleMode`), in drawing order, as indices into `items`. Exact at
- * any depth, and for every object, drawn or not.
+ * The objects that a rectangle takes (see `RectangleMode`), in drawing order, as indices into `items`. Exact at any
+ * depth, and for every object, drawn or not. With `view`, ink that is a background in it does not count.
  */
-export function itemsInRectangle(items: readonly Item[], rectangle: OrientedRectangle, mode: RectangleMode): number[] {
+export function itemsInRectangle(items: readonly Item[], rectangle: OrientedRectangle, mode: RectangleMode, view?: BackgroundView): number[] {
   const turn = turnOf(rectangle.angle);
+  const limitOf = (placed: PlacedSection): number => (view === undefined ? Infinity : backgroundWidth(placed, view.camera, view.viewport));
   const taken: number[] = [];
   items.forEach((item, index) => {
     const sections = placedSections(item);
+    const counted = sections.filter((placed) => sectionExtent(placed.section).minWidth < limitOf(placed));
     const take =
       mode === "inside"
-        ? sections.length > 0 && sections.every((placed) => sectionInside(placed, rectangle, turn))
-        : sections.some((placed) => sectionTouches(placed, rectangle, turn));
+        ? counted.length > 0 && counted.every((placed) => sectionInside(placed, rectangle, turn, limitOf(placed)))
+        : counted.some((placed) => sectionTouches(placed, rectangle, turn, limitOf(placed)));
     if (take) taken.push(index);
   });
   return taken;

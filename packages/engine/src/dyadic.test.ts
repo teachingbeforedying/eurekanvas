@@ -9,11 +9,14 @@ import {
   dyadicToString,
   equals,
   fromNumber,
+  magnitude,
   mul,
   neg,
+  quotient,
   shift,
   sign,
   significantBits,
+  squareRoot,
   sub,
   toNumber,
 } from "./dyadic";
@@ -206,5 +209,67 @@ describe("text form", () => {
     expect(() => dyadicFromString("1/3")).toThrow(SyntaxError);
     expect(() => dyadicFromString("")).toThrow(SyntaxError);
     expect(() => dyadicFromString("1.5/2^1")).toThrow(SyntaxError);
+  });
+});
+
+describe("magnitude", () => {
+  it("is the number of bits of the value, before its point", () => {
+    expect(magnitude(ONE)).toBe(1);
+    expect(magnitude(fromNumber(5))).toBe(3);
+    expect(magnitude(fromNumber(-5))).toBe(3);
+    expect(magnitude(fromNumber(0.25))).toBe(-1);
+    expect(magnitude(ZERO)).toBe(-Infinity);
+    expect(magnitude(shift(ONE, 5000))).toBe(5001);
+  });
+});
+
+describe("squareRoot", () => {
+  it("is exact for squares, at any size", () => {
+    expect(squareRoot(fromNumber(9), 10)).toEqual(fromNumber(3));
+    expect(squareRoot(ZERO, 10)).toEqual(ZERO);
+    expect(squareRoot(ONE, 0)).toEqual(ONE);
+    const huge = shift(fromNumber(25), 6000);
+    expect(squareRoot(huge, 0)).toEqual(shift(fromNumber(5), 3000));
+    const tiny = shift(fromNumber(9), -4000);
+    expect(squareRoot(tiny, 2100)).toEqual(shift(fromNumber(3), -2000));
+  });
+
+  it("rounds down to the number of bits asked for", () => {
+    expect(toNumber(squareRoot(fromNumber(2), 40))).toBeCloseTo(Math.SQRT2, 11);
+    expect(squareRoot(fromNumber(2), 0)).toEqual(ONE);
+    expect(squareRoot(fromNumber(2), 1)).toEqual(fromNumber(1));
+    const root = squareRoot(fromNumber(2), 200);
+    const square = mul(root, root);
+    expect(compare(square, fromNumber(2))).toBeLessThanOrEqual(0);
+    const above = add(root, shift(ONE, -200));
+    expect(compare(mul(above, above), fromNumber(2))).toBe(1);
+  });
+
+  it("drops the bits of a value finer than the precision asked for", () => {
+    expect(squareRoot(add(ONE, shift(ONE, -100)), 2)).toEqual(ONE);
+  });
+
+  it("refuses a negative value", () => {
+    expect(() => squareRoot(fromNumber(-1), 10)).toThrow(RangeError);
+  });
+});
+
+describe("quotient", () => {
+  it("divides, whatever the sizes", () => {
+    expect(quotient(fromNumber(3), fromNumber(4))).toBe(0.75);
+    expect(quotient(fromNumber(-3), fromNumber(4))).toBe(-0.75);
+    expect(quotient(fromNumber(1), fromNumber(3))).toBeCloseTo(1 / 3, 15);
+    expect(quotient(ZERO, fromNumber(7))).toBe(0);
+    expect(quotient(shift(fromNumber(3), 5000), shift(fromNumber(4), 5000))).toBe(0.75);
+    expect(quotient(shift(fromNumber(3), -5000), shift(fromNumber(4), -5000))).toBe(0.75);
+    expect(quotient(shift(ONE, 2000), ONE)).toBe(Infinity);
+    expect(quotient(ONE, shift(ONE, 2000))).toBe(0);
+    expect(() => quotient(ONE, ZERO)).toThrow(RangeError);
+  });
+
+  it("keeps all the bits of a small numerator over a large denominator", () => {
+    const denominator = add(shift(ONE, 300), ONE); // 2^300 + 1 needs 301 bits
+    expect(quotient(shift(ONE, 300), denominator)).toBe(1);
+    expect(quotient(fromNumber(3), shift(fromNumber(3), 3))).toBe(0.125);
   });
 });
