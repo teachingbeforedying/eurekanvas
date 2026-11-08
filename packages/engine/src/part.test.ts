@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { type Point, type Viewport, createCamera } from "./camera";
 import { type Group, type Item, isGroup, withTransform } from "./drawing";
 import { equals, fromNumber, sub, toNumber } from "./dyadic";
-import { placedSections } from "./placement";
-import { partOf, pathAt, replacedPart } from "./part";
+import { placeSection, placedAlone, placedSections, samePlace } from "./placement";
+import { insertedIn, partOf, pathAt, replacedPart } from "./part";
 import { type Stroke, StrokeRecorder } from "./stroke";
 import { applyTransform, composeTransforms, createTransform, inverseTransform, movedBy } from "./transform";
 import { createRandom } from "./test-utils";
@@ -137,6 +137,67 @@ describe("replacedPart", () => {
     const outer = createTransform({ origin: pt(0, 0), position: pt(5, 5) });
     const root: Item = withTransform(name, outer);
     expect((replacedPart(partOf(root, [0]), null) as Group).transform).toBe(outer);
+  });
+});
+
+describe("insertedIn", () => {
+  it("adds objects at an index of a group, nested or not, and leaves the rest alone", () => {
+    const extra = line(500, 500);
+    const nested = insertedIn(name, [0], 1, [extra]) as Group;
+    expect((nested.items[0] as Group).items).toEqual([a0, extra, a1]);
+    expect(nested.items[1]).toBe(syllableB);
+    const top = insertedIn(name, [], 2, [extra, extra]) as Group;
+    expect(top.items).toEqual([syllableA, syllableB, extra, extra]);
+  });
+
+  it("keeps what is added where it is in the world, inside transformed groups", () => {
+    const outer = createTransform({ origin: pt(50, 0), position: pt(500, 300), angle: 37, zLevel: 1, factor: 1.25, mirror: true });
+    const inner = createTransform({ origin: pt(0, 0), position: pt(9, 9), angle: 90 });
+    const root: Item = withTransform({ items: [withTransform(syllableA, inner), syllableB] }, outer);
+    const given = createTransform({ origin: pt(0, 0), position: pt(40, 60), angle: 12 });
+    const added = withTransform(line(0, 0), given);
+    const changed = insertedIn(root, [0], 2, [added]) as Group;
+    expect(changed.transform).toBe(outer);
+    expect((changed.items[0] as Group).transform).toBe(inner);
+    const placed = partOf(changed, [0, 2]).placed.transform;
+    if (placed === undefined) throw new Error("a transform expected");
+    expect(gap(placed.position, given.position)).toBeLessThan(1e-9);
+    expect(placed.angle).toBeCloseTo(12, 9);
+    expect(placed.mirror).toBe(false);
+    expect(placed.zLevel + Math.log2(placed.factor)).toBeCloseTo(0, 9);
+  });
+
+  it("takes an object without a transform as being in the world", () => {
+    const outer = createTransform({ origin: pt(0, 0), position: pt(100, 0) });
+    const root: Item = withTransform({ items: [a0] }, outer);
+    const changed = insertedIn(root, [], 1, [b0]) as Group;
+    expect(changed.items[1]?.transform).toEqual(inverseTransform(outer));
+    expect(placedSections(changed)[1]?.anchor).toEqual(placedAlone(b0.sections[0] as NonNullable<(typeof b0.sections)[0]>).anchor);
+  });
+});
+
+describe("samePlace", () => {
+  const section = a0.sections[0] as NonNullable<(typeof a0.sections)[0]>;
+
+  it("is true for the same stroke at exactly the same place, whatever the objects", () => {
+    expect(samePlace(placedAlone(section), placedAlone(section))).toBe(true);
+    expect(samePlace(placedAlone(section), placeSection(section, createTransform({ origin: pt(3, 3) })))).toBe(true);
+    const copied = { ...section, points: section.points.map((p) => ({ ...p })) };
+    expect(samePlace(placedAlone(section), placedAlone(copied))).toBe(true);
+  });
+
+  it("is false for anything that differs", () => {
+    const here = placedAlone(section);
+    for (const options of [{ position: pt(1, 0) }, { position: pt(0, 1) }, { angle: 90 }, { mirror: true }, { zLevel: 1 }, { factor: 1.5 }]) {
+      expect(samePlace(here, placeSection(section, createTransform({ origin: pt(0, 0), ...options })))).toBe(false);
+    }
+    const change = (p: Partial<(typeof section.points)[0]>) => ({ ...section, points: [section.points[0] as (typeof section.points)[0], { ...(section.points[1] as (typeof section.points)[0]), ...p }] });
+    expect(samePlace(here, placedAlone(change({ x: 11 })))).toBe(false);
+    expect(samePlace(here, placedAlone(change({ y: 1 })))).toBe(false);
+    expect(samePlace(here, placedAlone(change({ width: 3 })))).toBe(false);
+    const shorter = placedAlone({ ...section, points: section.points.slice(0, 1) });
+    expect(samePlace(here, shorter)).toBe(false);
+    expect(samePlace(shorter, here)).toBe(false);
   });
 });
 

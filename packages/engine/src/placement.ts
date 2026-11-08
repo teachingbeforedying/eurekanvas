@@ -12,6 +12,7 @@
 
 import { type Camera, type Point, type ScreenPoint, type Turn, type Viewport, turnOf, turned, worldToScreen } from "./camera";
 import { type Item, isGroup } from "./drawing";
+import { equals } from "./dyadic";
 import type { Section } from "./stroke";
 import { type Transform, applyTransform, composeTransforms } from "./transform";
 
@@ -50,6 +51,21 @@ export function placeSection(section: Section, t: Transform): PlacedSection {
     angle: t.angle,
     mirror: t.mirror,
   };
+}
+
+/** Whether two placed sections are the same stroke at exactly the same place: one would hide the other. */
+export function samePlace(a: PlacedSection, b: PlacedSection): boolean {
+  const [ours, theirs] = [a.section.points, b.section.points];
+  return (
+    a.zLevel === b.zLevel &&
+    a.factor === b.factor &&
+    a.angle === b.angle &&
+    a.mirror === b.mirror &&
+    equals(a.anchor.x, b.anchor.x) &&
+    equals(a.anchor.y, b.anchor.y) &&
+    ours.length === theirs.length &&
+    ours.every((p, i) => p.x === theirs[i]?.x && p.y === theirs[i]?.y && p.width === theirs[i]?.width)
+  );
 }
 
 // Objects are immutable, so their placed sections can be remembered for as long as they live.

@@ -209,6 +209,57 @@ fileInput.addEventListener("change", () => {
   );
 });
 
+// The clipboard of the system, in the format of the drawings. A browser only gives it without asking in these events,
+// which is why pasting into a group (Ctrl+Alt+V, which is not one of them) takes the last copy made in this page.
+document.addEventListener("copy", (event) => {
+  const copy = editor.copySelection();
+  if (copy === null) return; // nothing selected: the clipboard stays as it is
+  event.clipboardData?.setData("text/plain", JSON.stringify(drawingToJSON(copy)));
+  event.preventDefault();
+  showMessage(`copied ${objects(copy.items.length)}`);
+});
+
+document.addEventListener("cut", (event) => {
+  const copy = editor.cutSelection();
+  if (copy === null) return;
+  event.clipboardData?.setData("text/plain", JSON.stringify(drawingToJSON(copy)));
+  event.preventDefault();
+  showMessage(`cut ${objects(copy.items.length)} (${bringsBack(copy.items.length)})`);
+  changed();
+  invalidate();
+});
+
+document.addEventListener("paste", (event) => {
+  let drawing: Drawing;
+  try {
+    drawing = drawingFromJSON(JSON.parse(event.clipboardData?.getData("text/plain") ?? ""));
+  } catch {
+    showMessage("the clipboard holds no drawing");
+    return;
+  }
+  const count = editor.pasteDrawing(drawing);
+  if (count === 0) {
+    showMessage("nothing to paste now: release the button, then paste again");
+    return;
+  }
+  showMessage(`pasted ${objects(count)} (Ctrl+Z removes ${count === 1 ? "it" : "them"})`);
+  changed();
+  invalidate();
+});
+
+function pasteIntoGroup(): void {
+  const result = editor.pasteIntoGroup();
+  if (result === "nothingCopied") {
+    showMessage("nothing was copied in this page yet");
+  } else if (result === "noGroup") {
+    showMessage("select a group or a part to paste into");
+  } else if (result > 0) {
+    showMessage(`pasted ${objects(result)} into the group (Ctrl+Z removes ${result === 1 ? "it" : "them"})`);
+    changed();
+    invalidate();
+  }
+}
+
 // Frames are drawn at most once per animation frame, and only when something changed.
 let frameRequested = false;
 function invalidate(): void {
@@ -252,7 +303,8 @@ function updateHud(): void {
     `turn the selection: R + left button, around its middle (Shift: 15° steps)    R+H / R+G: a quarter turn    R + release Space: each object straight on the screen`,
     `mirror the selection: F+H (left and right)    F+V (top and bottom)    F + release Space: each object the right way and straight`,
     `mirror the view: F+Shift+H / F+Shift+V, or F+H / F+V with nothing selected    F + release Space: the right way and straight`,
-    `undo: Ctrl+Z (while ² is held: the last stroke)    reset the view: 0    clear: K (Ctrl+Z brings it back)`,
+    `copy, cut, paste: Ctrl+C, Ctrl+X, Ctrl+V    paste the last copy into the selected group: Ctrl+Alt+V`,
+    `undo: Ctrl+Z (while ² is held: the last stroke)  reset the view: 0    clear: K (Ctrl+Z brings it back)`,
     `save a file: Ctrl+S    open a file (adds to the drawing): Ctrl+O    show or hide this panel: H`,
   ].join("\n");
 }
@@ -370,6 +422,9 @@ window.addEventListener("keydown", (event) => {
       editor.setDrawKeyHeld(true);
       invalidate(); // the brush appears around the pointer
     }
+  } else if (event.ctrlKey && event.altKey && event.code === "KeyV") {
+    event.preventDefault(); // read by its place: AltGr, on a French keyboard, is reported as Ctrl+Alt
+    if (!event.repeat) pasteIntoGroup();
   } else if (event.key === "Escape") {
     hideMessage();
     editor.cancel();

@@ -71,8 +71,9 @@ export {
   placedAlone,
   placedSections,
   projectSection,
+  samePlace,
 } from "./placement";
-export { type Part, partOf, pathAt, replacedPart } from "./part";
+export { type Part, insertedIn, partOf, pathAt, replacedPart } from "./part";
 export { type OutlinePoint, type PathCommand, strokeOutline } from "./outline";
 export {
   type DrawableSection,

@@ -70,10 +70,36 @@ function rebuilt(item: Item, path: readonly number[], replacement: Item | null):
  * the part is removed, along with the groups left empty; `null` is returned if nothing is left of the object.
  */
 export function replacedPart(part: Part, placed: Item | null): Item | null {
-  if (placed === null || part.outer === undefined) return rebuilt(part.root, part.path, placed);
-  const back = inverseTransform(part.outer);
-  const local = withTransform(placed, placed.transform === undefined ? back : composeTransforms(back, placed.transform));
-  return rebuilt(part.root, part.path, local);
+  return rebuilt(part.root, part.path, placed === null ? null : inGroups(placed, part.outer));
+}
+
+/** An object given in the world's coordinates, in the coordinates of groups whose transforms compose into `outer`. */
+function inGroups(placed: Item, outer: Transform | undefined): Item {
+  if (outer === undefined) return placed;
+  const back = inverseTransform(outer);
+  return withTransform(placed, placed.transform === undefined ? back : composeTransforms(back, placed.transform));
+}
+
+/**
+ * The top-level object with objects added to the group at the end of `path` (the object itself when it is empty),
+ * from index `at` on. The objects are given in the world's coordinates, and stay where they are in the world.
+ */
+export function insertedIn(root: Item, path: readonly number[], at: number, placed: readonly Item[]): Item {
+  let outer = root.transform;
+  let target = root;
+  for (const index of path) {
+    target = (target as Group).items[index] as Item;
+    outer = within(outer, target.transform);
+  }
+  const added = placed.map((item) => inGroups(item, outer));
+  const insert = (item: Item, rest: readonly number[]): Item => {
+    const group = item as Group;
+    const [index, ...tail] = rest;
+    return index === undefined
+      ? { ...group, items: [...group.items.slice(0, at), ...added, ...group.items.slice(at)] }
+      : { ...group, items: group.items.map((child, i) => (i === index ? insert(child, tail) : child)) };
+  };
+  return insert(root, path);
 }
 
 /**

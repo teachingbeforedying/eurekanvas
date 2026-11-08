@@ -21,6 +21,7 @@ import {
   createCamera,
   createTransform,
   followingView,
+  insertedIn,
   isGroup,
   itemBounds,
   itemFrame,
@@ -40,6 +41,7 @@ import {
   rectangleCenter,
   replacedPart,
   rotateAt,
+  samePlace,
   scaledAround,
   screenRectangle,
   screenToWorld,
@@ -121,6 +123,9 @@ export const CLICK_TOLERANCE_PIXELS = 4;
 
 /** How far, in pixels, the pointer must move with the button down before a click becomes a rectangle. */
 export const DRAG_THRESHOLD_PIXELS = 4;
+
+/** How far, in pixels on the screen and along both axes, a pasted object moves away from one it would exactly cover. */
+export const PASTE_OFFSET_PIXELS = 20;
 
 /** With Shift, the view turned by the pointer stops at multiples of this angle, in degrees. */
 export const TURN_STEP_DEGREES = 15;
@@ -347,6 +352,8 @@ export class Editor {
   private _part: Part | null = null;
   /** How many levels the object under the last press with Alt has, itself included. */
   private levels = 1;
+  /** The last selection copied or cut in this page, with the view it was seen in. */
+  private lastCopy: Drawing | null = null;
 
   constructor(viewport: Viewport) {
     this._viewport = viewport;
@@ -839,6 +846,85 @@ export class Editor {
   }
 
   /**
+   * The selection as a drawing, with the view it is seen in, in drawing order: a part is taken out of its groups.
+   * It is remembered for `pasteIntoGroup`. Gives `null`, doing nothing, with nothing selected or while drawing.
+   */
+  copySelection(): Drawing | null {
+    if (this.isBusy || this._selection.size === 0) return null;
+    const items = this._part !== null ? [this._part.placed] : this.finished.filter((item) => this._selection.has(item));
+    this.lastCopy = { items, view: this._camera };
+    return this.lastCopy;
+  }
+
+  /** As `copySelection`, and removes the selection, as one action. */
+  cutSelection(): Drawing | null {
+    const copy = this.copySelection();
+    if (copy !== null) this.deleteSelection();
+    return copy;
+  }
+
+  /** The objects of a copied drawing, looking on the screen as they did with its view; moved away from what they would exactly cover. */
+  private pastedCopies(copy: Drawing): readonly Item[] {
+    const existing = this.finished.flatMap(placedSections);
+    for (let n = 0; ; n++) {
+      const carrying = followingView(copy.view, this._camera, { x: n * PASTE_OFFSET_PIXELS, y: n * PASTE_OFFSET_PIXELS });
+      const copies = copy.items.map((item) => withTransform(item, composeTransforms(carrying, transformOf(item))));
+      const covering = copies.some((item) => {
+        const first = placedSections(item)[0];
+        return first !== undefined && existing.some((placed) => samePlace(first, placed));
+      });
+      // an object already there can only stop one position: this always ends
+      if (!covering || n === existing.length) return copies;
+    }
+  }
+
+  /**
+   * Adds the objects of a copied drawing and selects them, as one action. Returns how many; 0, doing nothing, with
+   * no object or while drawing.
+   */
+  pasteDrawing(drawing: Drawing): number {
+    if (this.isBusy || drawing.items.length === 0) return 0;
+    this.interruptHold();
+    const copies = this.pastedCopies(drawing);
+    this.commit([...this.finished, ...copies]);
+    this.select(copies);
+    return copies.length;
+  }
+
+  /**
+   * Adds the last copy made in this page to the group of the selection, as one action: right after the selected part
+   * in its group, or at the end of the selected group. Returns how many objects were added; 0 while drawing.
+   */
+  pasteIntoGroup(): number | "nothingCopied" | "noGroup" {
+    if (this.isBusy) return 0;
+    this.interruptHold();
+    const copy = this.lastCopy;
+    if (copy === null) return "nothingCopied";
+    const part = this._part;
+    const [only, ...others] = this._selection;
+    let root: Item;
+    let path: readonly number[];
+    let at: number;
+    if (part !== null) {
+      root = part.root;
+      path = part.path.slice(0, -1);
+      at = (part.path[part.path.length - 1] as number) + 1;
+    } else if (only !== undefined && others.length === 0 && isGroup(only)) {
+      root = only;
+      path = [];
+      at = only.items.length;
+    } else {
+      return "noGroup";
+    }
+    const copies = this.pastedCopies(copy);
+    const changed = insertedIn(root, path, at, copies);
+    this.commit(this.finished.map((item) => (item === root ? changed : item)));
+    // a single copy is selected; several, by their group, since one part only can be selected
+    this.selectLevel(changed, copies.length === 1 ? [...path, at] : path, copies.length === 1 ? path.length + 1 : path.length);
+    return copies.length;
+  }
+
+  /**
    * Makes one group of the selected objects, in their drawing order, at the place of the topmost of them, and
    * selects it. Groups can be nested. One action. Returns how many objects were grouped; 0, doing nothing, with
    * fewer than two selected or while drawing.
@@ -1286,7 +1372,10 @@ export class Editor {
   addDrawing(drawing: Drawing): boolean {
     if (this.isBusy) return false;
     this.interruptHold();
-    if (drawing.items.length > 0) this.commit([...this.finished, ...drawing.items]);
+    if (drawing.items.length > 0) {
+      this.commit([...this.finished, ...drawing.items]);
+      this.select(drawing.items); // ready to be placed
+    }
     this._camera = drawing.view;
     return true;
   }

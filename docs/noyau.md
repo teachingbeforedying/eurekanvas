@@ -361,6 +361,19 @@ La sélection doit servir à tout : assembler des fichiers, corriger un dessin, 
 
 **Non prévu pour l'instant** : poignées, lasso, verrouillage, ordre d'affichage, aimantation à une grille.
 
+## Copier, couper, coller : décisions (2026-11-08)
+
+Étape 4 de la sélection. Les grandes lignes étaient décidées le 25 octobre (« La sélection : décisions »).
+
+**Précisions de Sébastien** :
+- Le collage garde tout ce qu'on voyait : même place, même taille, même angle et même miroir à l'écran qu'à la copie, même si la vue a changé.
+- En cascade : un collage qui tomberait exactement sur un objet déjà là se décale de 20 px de plus (20, 40, 60...).
+- **Une partie** (voir « L'altération ») : `Ctrl+V` colle en objet libre, comme l'ancienne version qui oubliait le groupe parent. `Ctrl+X` retire la partie de son groupe.
+- **`Ctrl+Alt+V` colle dans le groupe de la sélection**, l'idée de Sébastien : une partie sélectionnée, la copie arrive juste après elle dans son groupe parent ; un groupe entier sélectionné, à la fin de ce groupe. Sinon, un message et rien d'autre. Il colle la dernière copie faite dans cette page : le navigateur ne donne le presse-papiers sans autorisation que pour `Ctrl+V`.
+- `X` (dupliquer) n'est pas repris pour l'instant.
+
+**Mes choix** (à faire juger) : `Ctrl+C` sans sélection ne touche pas au presse-papiers. Plusieurs objets collés dans un groupe : c'est le groupe qui est alors sélectionné, puisqu'une seule partie peut l'être.
+
 ## L'altération : décisions (2026-11-08)
 
 Modifier une partie d'un groupe sans casser le groupe. Sébastien l'a demandée avant l'étape 4, après avoir appuyé sur Alt par réflexe pour déplacer une syllabe d'un prénom groupé.
@@ -616,6 +629,28 @@ Décisions dans « La sélection : décisions », aux paragraphes « précisé l
 **Mesure** : pour un trait de 4 000 points, une image pendant le déplacement prend 115 ms, dont 102 ms déjà présentes pour un dessin immobile (le tracé du contour). Traiter un mouvement du pointeur prend 0,1 ms. Le coût vient du dessin, pas du déplacement.
 
 **Contrôle par mutation** : 46 modifications volontaires, toutes tuées à la fin. Au premier passage, 8 survivaient, chacune signalant un cas absent des tests : un déplacement de vue de moins de 4 px, Alt sur un objet déjà sélectionné, l'arrondi du niveau vers 1,73, l'emplacement exact autour du pointeur avec Maj, `Ctrl+A` avec un autre objet présent, un trait tracé au milieu d'une suite de flèches, et `0` en tenant.
+
+## Copier, couper, coller : livraison (2026-11-08)
+
+Décisions dans « Copier, couper, coller : décisions ». Le format ne change pas : ce qui est copié est un dessin ordinaire, avec la vue où on le voyait.
+
+- **Page** : les événements `copy`, `cut` et `paste` du navigateur donnent le presse-papiers sans demander d'autorisation. Le dessin y va en texte, au format `eurekanvas/drawing`. Ce qui n'est pas un dessin donne un message.
+- **Éditeur** :
+  - `copySelection` donne la sélection dans l'ordre du dessin, ou la partie sortie de ses groupes (`placed`), et retient ce dernier pour `Ctrl+Alt+V`.
+  - Le collage passe par `followingView(vue de la copie, vue actuelle)`, la même transformation que pour ce qu'on tient : l'objet garde sa place, sa taille, son angle et son miroir à l'écran.
+  - La cascade (`samePlace`, `placement.ts`) compare exactement la première section de chaque objet collé à celles du dessin. Elle cherche des positions de 20 en 20 px, et s'arrête au pire après autant d'essais qu'il y a de sections : chacune ne peut bloquer qu'une position.
+  - `pasteIntoGroup` et `insertedIn` (`part.ts`) ajoutent des objets donnés dans le monde à un groupe, à travers l'inverse des transformations de ses parents.
+  - `Ctrl+O` sélectionne ce qu'il ajoute.
+
+**Vérifié dans le navigateur** (Chromium du panneau Browser, événements `ClipboardEvent` et touches synthétiques passant par `main.ts`) :
+- `copy` sans sélection laisse le presse-papiers ; avec une sélection, il reçoit un document `eurekanvas/drawing` ;
+- `paste` : à 20 px, puis 40 px en cascade ; deux `Ctrl+Z` les retirent ; un texte quelconque donne « the clipboard holds no drawing » ;
+- après un dézoom, la copie est à la même place à l'écran ;
+- `Ctrl+Alt+V` : un message sans groupe ; sur une syllabe, la copie arrive juste après elle et devient la partie sélectionnée, en cascade ; `cut` retire une partie, `Ctrl+Z` la remet ; aucune erreur.
+
+**Non vérifié** : le vrai raccourci `Ctrl+C` / `Ctrl+V` du navigateur (mes outils envoient des événements synthétiques, et je n'ai pas voulu écraser le presse-papiers de la machine), et Firefox.
+
+**Contrôle par mutation** : 42 modifications volontaires, toutes tuées à la fin. Au premier passage, une boucle sans fin dans le collage a bloqué les tests : la cascade a maintenant une limite prouvée. Deux survivaient : une section plus courte que l'autre n'était testée que dans un sens, et un collage vide enregistrait une action et vidait la sélection. Les tests les couvrent.
 
 ## L'altération : livraison (2026-11-08)
 
